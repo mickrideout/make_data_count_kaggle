@@ -5,14 +5,7 @@ from make_data_count_kaggle.dataset_classification import dummy_classifier
 from make_data_count_kaggle.dataset_matching import basic_matching, create_empty_candidate_dataset
 
 
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python infer.py <input_dir> <output_dir>")
-        sys.exit(1)
-    
-    input_directory = sys.argv[1]
-    output_directory = sys.argv[2]
-
+def main(input_directory, output_directory):
     # Dataset preprocessing
     convert_pdfs_to_markdown(f'{input_directory}/test', output_directory)
     decompose_markdown_to_paragraphs(output_directory)
@@ -23,6 +16,18 @@ if __name__ == "__main__":
 
     # Candidate classification
     dummy_classifier(output_directory, output_directory)
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage: python infer.py <input_dir> <output_dir>")
+        sys.exit(1)
+    
+    input_directory = sys.argv[1]
+    output_directory = sys.argv[2]
+
+    main(input_directory, output_directory)
+
+
 
 
 
