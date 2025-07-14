@@ -1,8 +1,9 @@
 import os
 import sys
+
 from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_markdown, decompose_markdown_to_paragraphs
-from make_data_count_kaggle.dataset_classification import dummy_classifier
 from make_data_count_kaggle.dataset_matching import basic_matching, create_empty_candidate_dataset
+from make_data_count_kaggle.dataset_classification import dummy_classifier
 
 
 def main(input_directory, output_directory):

@@ -1,3 +1,4 @@
-marker-pdf
+PyMuPDF
 pandas
 mrkdwn_analysis
+pymupdf4llm

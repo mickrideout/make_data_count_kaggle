@@ -1,7 +1,6 @@
 import glob
 import os
 from tqdm import tqdm
-import pickle
 import re
 import pandas as pd
 
@@ -51,15 +50,17 @@ def basic_matching(input_dir, output_dir):
     
     df = pd.DataFrame(columns=CANDIDATE_HEADER)
 
-    for file in tqdm(glob.glob(f'{output_dir}/*.pkl')):
-        with open(file, 'rb') as f:
-            data = pickle.load(f)
+    for file in tqdm(glob.glob(f'{output_dir}/*.md')):
+        with open(file, 'r', encoding='utf-8') as f:
+            content = f.read()
             article_id = os.path.basename(file).rsplit(".", 1)[0]
             print(f"Processing {article_id}")
             
-            for paragraph in data:
-                match_list = extract_references(paragraph)
-                for match in match_list:
-                    df.loc[len(df)] = [article_id, MATCHER_NAME, match, paragraph]
+            paragraphs = content.split('\n\n')
+            for paragraph in paragraphs:
+                if paragraph.strip():
+                    match_list = extract_references(paragraph)
+                    for match in match_list:
+                        df.loc[len(df)] = [article_id, MATCHER_NAME, match, paragraph]
 
     df.to_csv(f"{output_dir}/{CANDIDATE_CSV_FILE}", index=False)

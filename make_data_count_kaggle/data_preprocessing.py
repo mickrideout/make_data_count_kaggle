@@ -1,17 +1,88 @@
 import os
 import glob
 import pickle
+import pymupdf4llm
+import re
 from pathlib import Path
-from marker.converters.pdf import PdfConverter
-from marker.models import create_model_dict
-from marker.config.parser import ConfigParser
-from marker.output import text_from_rendered
 from mrkdwn_analysis import MarkdownAnalyzer
+
+
+def clean_markdown_text(md_text):
+    """
+    Clean up markdown text by removing column breaks and creating natural paragraphs.
+    
+    Args:
+        md_text (str): Raw markdown text from pymupdf4llm
+        
+    Returns:
+        str: Cleaned markdown text with natural paragraphs
+    """
+    # First, normalize line endings
+    md_text = md_text.replace('\r\n', '\n').replace('\r', '\n')
+    
+    # Split into lines and process
+    lines = md_text.split('\n')
+    cleaned_lines = []
+    current_paragraph = []
+    
+    for i, line in enumerate(lines):
+        line = line.strip()
+        
+        # Skip empty lines
+        if not line:
+            # If we have accumulated text, join it and add to cleaned lines
+            if current_paragraph:
+                cleaned_lines.append(' '.join(current_paragraph))
+                current_paragraph = []
+            cleaned_lines.append('')
+            continue
+        
+        # Check if this line should start a new paragraph
+        should_start_new = (
+            line.startswith('#') or  # Headers
+            line.startswith('- ') or  # List items
+            line.startswith('* ') or  # List items
+            line.startswith('1. ') or  # Numbered lists
+            line.startswith('**') or   # Bold text
+            line.startswith('```') or  # Code blocks
+            line.startswith('|') or    # Table rows
+            (i > 0 and lines[i-1].strip() and 
+             lines[i-1].strip().endswith(('.', '!', '?', ':', ';')))  # Previous line ended with punctuation
+        )
+        
+        # If we should start a new paragraph and we have accumulated text
+        if should_start_new and current_paragraph:
+            cleaned_lines.append(' '.join(current_paragraph))
+            current_paragraph = []
+        
+        # Add current line to paragraph or start new one
+        if should_start_new:
+            cleaned_lines.append(line)
+        else:
+            current_paragraph.append(line)
+    
+    # Add any remaining paragraph
+    if current_paragraph:
+        cleaned_lines.append(' '.join(current_paragraph))
+    
+    # Join all lines
+    cleaned_text = '\n'.join(cleaned_lines)
+    
+    # Remove multiple consecutive spaces
+    cleaned_text = re.sub(r' +', ' ', cleaned_text)
+    
+    # Remove multiple consecutive newlines (keep max 2)
+    cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
+    
+    # Remove trailing spaces from lines
+    cleaned_text = re.sub(r' +$', '', cleaned_text, flags=re.MULTILINE)
+    
+    return cleaned_text
 
 
 def convert_pdfs_to_markdown(input_dir, output_dir):
     """
-    Convert all PDF files in input_dir to markdown files in output_dir using marker.
+    Convert all PDF files in input_dir to markdown files in output_dir using pymupdf4llm.
     
     Args:
         input_dir (str): Directory containing PDF files to convert
@@ -27,8 +98,8 @@ def convert_pdfs_to_markdown(input_dir, output_dir):
         print(f"Output directory already exists and contains files: {output_dir}")
         return
 
-    
     output_path.mkdir(parents=True, exist_ok=True)
+    
     
     pdf_files = glob.glob(str(input_path / "**/*.pdf"), recursive=True)
     
@@ -47,33 +118,19 @@ def convert_pdfs_to_markdown(input_dir, output_dir):
         print(f"Converting {pdf_path.name} to {output_file.name}")
         
         try:
-            if os.environ.get('KAGGLE_KERNEL_RUN_TYPE') == 'Interactive' or 'KAGGLE_CONTAINER_NAME' in os.environ:
-                config = {
-                    "output_format": "markdown",
-                    "disable_image_extraction": True,
-                    "kaggle_mode": True,
-                }
-            else:
-                config = {
-                    "output_format": "markdown",
-                    "disable_image_extraction": True,
-                }
-            config_parser = ConfigParser(config)
-
-            converter = PdfConverter(
-                config=config_parser.generate_config_dict(),
-                artifact_dict=create_model_dict(),
-                processor_list=config_parser.get_processors(),
-                renderer=config_parser.get_renderer(),
-                llm_service=config_parser.get_llm_service()
-            )
-            markdown_content = converter(pdf_file)
+            md_text = pymupdf4llm.to_markdown(pdf_file)
             
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(text_from_rendered(markdown_content)[0])
+            if md_text.strip():
+                # Clean up column breaks and create natural paragraphs
+                cleaned_md = clean_markdown_text(md_text)
                 
-            print(f"Successfully converted {pdf_path.name}")
-            
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    f.write(cleaned_md)
+                    
+                print(f"Successfully converted {pdf_path.name}")
+            else:
+                print(f"No text content found in {pdf_path.name}")
+                
         except Exception as e:
             print(f"Error converting {pdf_path.name}: {str(e)}")
     
