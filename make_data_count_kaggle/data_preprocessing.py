@@ -47,10 +47,17 @@ def convert_pdfs_to_markdown(input_dir, output_dir):
         print(f"Converting {pdf_path.name} to {output_file.name}")
         
         try:
-            config = {
-                "output_format": "markdown",
-                "disable_image_extraction": True,
-            }
+            if os.environ.get('KAGGLE_KERNEL_RUN_TYPE') == 'Interactive' or 'KAGGLE_CONTAINER_NAME' in os.environ:
+                config = {
+                    "output_format": "markdown",
+                    "disable_image_extraction": True,
+                    "kaggle_mode": True,
+                }
+            else:
+                config = {
+                    "output_format": "markdown",
+                    "disable_image_extraction": True,
+                }
             config_parser = ConfigParser(config)
 
             converter = PdfConverter(
