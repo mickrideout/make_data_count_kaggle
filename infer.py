@@ -1,14 +1,14 @@
 import os
 import sys
 
-from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_markdown, decompose_text_to_paragraphs
+from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, decompose_text_to_paragraphs
 from make_data_count_kaggle.dataset_matching import basic_matching, create_empty_candidate_dataset
 from make_data_count_kaggle.dataset_classification import dummy_classifier
 
 
 def main(input_directory, output_directory):
     # Dataset preprocessing
-    convert_pdfs_to_markdown(f'{input_directory}', output_directory)
+    convert_pdfs_to_text(f'{input_directory}', output_directory)
     decompose_text_to_paragraphs(output_directory)
 
     # Candidate generation

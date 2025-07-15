@@ -9,21 +9,21 @@ import concurrent.futures
 from functools import partial
 
 
-def clean_markdown_text(md_text):
+def clean_text(text):
     """
-    Clean up markdown text by removing column breaks and creating natural paragraphs.
+    Clean up text by removing column breaks and creating natural paragraphs.
     
     Args:
-        md_text (str): Raw markdown text from pymupdf4llm
+        text (str): Raw text from pymupdf4llm
         
     Returns:
-        str: Cleaned markdown text with natural paragraphs
+        str: Cleaned text with natural paragraphs
     """
     # First, normalize line endings
-    md_text = md_text.replace('\r\n', '\n').replace('\r', '\n')
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
     
     # Split into lines and process
-    lines = md_text.split('\n')
+    lines = text.split('\n')
     cleaned_lines = []
     current_paragraph = []
     
@@ -82,14 +82,14 @@ def clean_markdown_text(md_text):
     return cleaned_text
 
 
-def _convert_pdf_to_markdown_worker(pdf_file, output_dir):
+def _convert_pdf_to_text_worker(pdf_file, output_dir):
     """
-    Worker function to convert a single PDF to markdown with a 10-minute timeout.
+    Worker function to convert a single PDF to text with a 10-minute timeout.
     """
     pdf_path = Path(pdf_file)
     output_path = Path(output_dir)
     filename = pdf_path.stem
-    output_file = output_path / f"{filename}.md"
+    output_file = output_path / f"{filename}.txt"
 
     if output_file.exists():
         return f"Skipping {pdf_path.name} - {output_file.name} already exists"
@@ -103,11 +103,11 @@ def _convert_pdf_to_markdown_worker(pdf_file, output_dir):
     signal.alarm(600)
 
     try:
-        md_text = pymupdf4llm.to_markdown(str(pdf_path))
-        if md_text.strip():
-            cleaned_md = clean_markdown_text(md_text)
+        text = pymupdf4llm.to_markdown(str(pdf_path))
+        if text.strip():
+            cleaned_text = clean_text(text)
             with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(cleaned_md)
+                f.write(cleaned_text)
             return f"Successfully converted {pdf_path.name}"
         else:
             return f"No text content found in {pdf_path.name}"
@@ -122,13 +122,13 @@ def _convert_pdf_to_markdown_worker(pdf_file, output_dir):
         signal.alarm(0)
 
 
-def convert_pdfs_to_markdown(input_dir, output_dir):
+def convert_pdfs_to_text(input_dir, output_dir):
     """
-    Convert all PDF files in input_dir to markdown files in output_dir using pymupdf4llm in parallel.
+    Convert all PDF files in input_dir to text files in output_dir using pymupdf4llm in parallel.
     
     Args:
         input_dir (str): Directory containing PDF files to convert
-        output_dir (str): Directory where markdown files will be saved
+        output_dir (str): Directory where text files will be saved
     """
     input_path = Path(input_dir)
     output_path = Path(output_dir)
@@ -148,7 +148,7 @@ def convert_pdfs_to_markdown(input_dir, output_dir):
     
     with concurrent.futures.ProcessPoolExecutor() as executor:
         # Create a partial function to pass the output_dir to the worker
-        convert_func = partial(_convert_pdf_to_markdown_worker, output_dir=output_dir)
+        convert_func = partial(_convert_pdf_to_text_worker, output_dir=output_dir)
         
         # Process files in parallel
         results = executor.map(convert_func, pdf_files)
@@ -157,23 +157,23 @@ def convert_pdfs_to_markdown(input_dir, output_dir):
         for result in results:
             print(result)
             
-    print(f"Conversion complete. Markdown files saved to {output_dir}")
+    print(f"Conversion complete. Text files saved to {output_dir}")
 
 
-def _decompose_text_worker(md_file, output_dir):
+def _decompose_text_worker(text_file, output_dir):
     """
-    Worker function to decompose a single markdown file into paragraphs.
+    Worker function to decompose a single text file into paragraphs.
     """
-    md_path = Path(md_file)
+    text_path = Path(text_file)
     output_path = Path(output_dir)
-    filename = md_path.stem
+    filename = text_path.stem
     pickle_file = output_path / f"{filename}.pkl"
 
     if pickle_file.exists():
-        return f"Skipping {md_path.name} - {pickle_file.name} already exists"
+        return f"Skipping {text_path.name} - {pickle_file.name} already exists"
 
     try:
-        with open(md_path, 'r', encoding='utf-8') as f:
+        with open(text_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
         # Paragraphs are separated by blank lines
@@ -182,9 +182,9 @@ def _decompose_text_worker(md_file, output_dir):
         with open(pickle_file, 'wb') as f:
             pickle.dump(paragraphs, f)
             
-        return f"Successfully decomposed {md_path.name} into {len(paragraphs)} paragraphs"
+        return f"Successfully decomposed {text_path.name} into {len(paragraphs)} paragraphs"
     except Exception as e:
-        return f"Error decomposing {md_path.name}: {str(e)}"
+        return f"Error decomposing {text_path.name}: {str(e)}"
 
 
 def decompose_text_to_paragraphs(output_dir):
@@ -193,27 +193,27 @@ def decompose_text_to_paragraphs(output_dir):
     arrays as pickle files in parallel.
     
     Args:
-        output_dir (str): Directory containing markdown files to decompose
+        output_dir (str): Directory containing text files to decompose
     """
     output_path = Path(output_dir)
 
     if not output_path.exists():
         raise ValueError(f"Output directory does not exist: {output_dir}")
     
-    md_files = glob.glob(str(output_path / "*.md"), recursive=False)
+    text_files = glob.glob(str(output_path / "*.txt"), recursive=False)
     
-    if not md_files:
-        print(f"No markdown files found in {output_dir}")
+    if not text_files:
+        print(f"No text files found in {output_dir}")
         return
     
-    print(f"Found {len(md_files)} markdown files to decompose")
+    print(f"Found {len(text_files)} text files to decompose")
     
     with concurrent.futures.ProcessPoolExecutor() as executor:
         # Create a partial function to pass the output_dir to the worker
         decompose_func = partial(_decompose_text_worker, output_dir=output_dir)
         
         # Process files in parallel
-        results = executor.map(decompose_func, md_files)
+        results = executor.map(decompose_func, text_files)
         
         # Output results
         for result in results:
@@ -232,5 +232,5 @@ if __name__ == "__main__":
     input_directory = sys.argv[1]
     output_directory = sys.argv[2]
     
-    convert_pdfs_to_markdown(input_directory, output_directory)
+    convert_pdfs_to_text(input_directory, output_directory)
     decompose_text_to_paragraphs(output_directory)
