@@ -24,6 +24,11 @@ The project is organized as follows:
     -   `dataset_classification.py`: Contains the data loading and feature engineering logic for the classification task.
     -   `dataset_matching.py`: Contains the data loading and feature engineering logic for the matching task.
 
+## Code Conventions
+
+- Only add code comments to function definitions.
+- Always use British spelling.
+
 ## How to Run
 
 ### 1. Installation
@@ -39,7 +44,7 @@ pip install -r requirements.txt
 To train the model, run the `train.py` script:
 
 ```bash
-python train.py
+python /home/mick/src/kaggle/make_data_count_kaggle/train.py /home/mick//data/make-data-count/data/provided /home/mick/tmp/make-data-count
 ```
 
 ### 3. Inference
