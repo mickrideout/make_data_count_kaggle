@@ -93,10 +93,7 @@ def convert_pdfs_to_markdown(input_dir, output_dir):
     
     if not input_path.exists():
         raise ValueError(f"Input directory does not exist: {input_dir}")
-    
-    if output_path.exists() and output_path.is_dir() and len(list(output_path.iterdir())) > 0:
-        print(f"Output directory already exists and contains files: {output_dir}")
-        return
+
 
     output_path.mkdir(parents=True, exist_ok=True)
     
@@ -137,9 +134,9 @@ def convert_pdfs_to_markdown(input_dir, output_dir):
     print(f"Conversion complete. Markdown files saved to {output_dir}")
 
 
-def decompose_markdown_to_paragraphs(output_dir):
+def decompose_text_to_paragraphs(output_dir):
     """
-    Decompose all markdown files in output_dir into paragraphs using markdown-analysis
+    Decompose all text in output_dir into paragraphs using markdown-analysis
     and save the paragraph arrays as pickle files.
     
     Args:
@@ -147,10 +144,6 @@ def decompose_markdown_to_paragraphs(output_dir):
     """
     output_path = Path(output_dir)
 
-    if output_path.exists() and output_path.is_dir() and len(list(output_path.iterdir())) > 0:
-        print(f"Output directory already exists and contains files: {output_dir}")
-        return
-    
     if not output_path.exists():
         raise ValueError(f"Output directory does not exist: {output_dir}")
     
