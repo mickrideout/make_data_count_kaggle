@@ -8,7 +8,7 @@ from make_data_count_kaggle.dataset_classification import dummy_classifier
 
 def main(input_directory, output_directory):
     # Dataset preprocessing
-    convert_pdfs_to_markdown(f'{input_directory}/test', output_directory)
+    convert_pdfs_to_markdown(f'{input_directory}', output_directory)
     decompose_markdown_to_paragraphs(output_directory)
 
     # Candidate generation
