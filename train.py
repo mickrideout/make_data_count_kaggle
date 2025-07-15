@@ -29,7 +29,7 @@ if __name__ == "__main__":
 
     # Evaluation
     ground_truth_df = pd.read_csv(f"{input_directory}/train_labels.csv")
-    f1, precision, recall, tp, fp, fn = calculate_f1_score(ground_truth_df, output_df)
+    f1, precision, recall, tp, fp, fn = calculate_f1_score(ground_truth_df, output_df, output_directory)
 
     print(f"F1 Score: {f1}")
     print(f"Precision: {precision}")
