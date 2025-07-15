@@ -14,7 +14,7 @@ def create_empty_candidate_dataset(output_dir):
     with open(f"{output_dir}/{CANDIDATE_CSV_FILE}", "w") as f:
         f.write(",".join(CANDIDATE_HEADER) + "\n")
 
-def basic_matching(input_dir, output_dir):
+def basic_matching(input_dir, output_dir, context_paragraphs=2):
     """
     Basic matching of the dataset. Adapted from https://www.kaggle.com/code/srinivasta/make-data-count-finding-data-references
     """
@@ -25,6 +25,8 @@ def basic_matching(input_dir, output_dir):
 
     def normalize_doi(doi):
         doi = doi.strip().lower()
+        if doi.endswith(')') and doi.count('(') < doi.count(')'):
+            doi = doi[:-1]
         if doi.startswith("https://doi.org/"):
             return doi
         if doi.startswith("doi:"):
@@ -57,10 +59,17 @@ def basic_matching(input_dir, output_dir):
             print(f"Processing {article_id}")
             
             paragraphs = content.split('\n\n')
-            for paragraph in paragraphs:
+            for i, paragraph in enumerate(paragraphs):
                 if paragraph.strip():
                     match_list = extract_references(paragraph)
+                    if not match_list:
+                        continue
+                    
+                    start_index = max(0, i - context_paragraphs)
+                    end_index = min(len(paragraphs), i + context_paragraphs + 1)
+                    context_text = "\n\n".join(paragraphs[start_index:end_index])
+
                     for match in match_list:
-                        df.loc[len(df)] = [article_id, MATCHER_NAME, match, paragraph]
+                        df.loc[len(df)] = [article_id, MATCHER_NAME, match, context_text]
 
     df.to_csv(f"{output_dir}/{CANDIDATE_CSV_FILE}", index=False)

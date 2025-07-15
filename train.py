@@ -22,7 +22,7 @@ if __name__ == "__main__":
 
     # Candidate generation
     create_empty_candidate_dataset(output_directory)
-    basic_matching(output_directory, output_directory)
+    basic_matching(output_directory, output_directory, 2)
 
     # Candidate classification
     output_df = dummy_classifier(output_directory, output_directory)

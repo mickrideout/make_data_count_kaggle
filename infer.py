@@ -13,7 +13,7 @@ def main(input_directory, output_directory):
 
     # Candidate generation
     create_empty_candidate_dataset(output_directory)
-    basic_matching(output_directory, output_directory)
+    basic_matching(output_directory, output_directory, 2)
 
     # Candidate classification
     dummy_classifier(output_directory, output_directory)
