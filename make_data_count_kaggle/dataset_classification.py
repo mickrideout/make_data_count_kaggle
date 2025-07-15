@@ -22,3 +22,4 @@ def dummy_classifier(input_dir, output_dir):
     
 
     output_df.to_csv(f"{output_dir}/{SUBMISSION_FILE}", index=False)
+    return output_df
