@@ -1,8 +1,9 @@
 import os
 import sys
 
+from make_data_count_kaggle.dataset_classification import dummy_classifier
 from make_data_count_kaggle.dataset_matching import basic_matching, create_empty_candidate_dataset
-from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_markdown, decompose_markdown_to_paragraphs
+from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_markdown, decompose_text_to_paragraphs
 
 
 if __name__ == "__main__":
@@ -15,10 +16,14 @@ if __name__ == "__main__":
     
     # Dataset preprocessing
     convert_pdfs_to_markdown(f"{input_directory}/train", output_directory)
-    decompose_markdown_to_paragraphs(output_directory)
+    decompose_text_to_paragraphs(output_directory)
 
     # Candidate generation
     create_empty_candidate_dataset(output_directory)
     basic_matching(output_directory, output_directory)
-    
+
+    # Candidate classification
+    output_df = dummy_classifier(output_directory, output_directory)
+
+
 
