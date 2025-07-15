@@ -52,7 +52,7 @@ def basic_matching(input_dir, output_dir, context_paragraphs=2):
     
     df = pd.DataFrame(columns=CANDIDATE_HEADER)
 
-    for file in tqdm(glob.glob(f'{output_dir}/*.md')):
+    for file in tqdm(glob.glob(f'{output_dir}/*.txt')):
         with open(file, 'r', encoding='utf-8') as f:
             content = f.read()
             article_id = os.path.basename(file).rsplit(".", 1)[0]
