@@ -3,6 +3,7 @@ import glob
 import pickle
 import signal
 import pymupdf4llm
+import xml.etree.ElementTree as ET
 import re
 from pathlib import Path
 import concurrent.futures
@@ -68,23 +69,14 @@ def clean_text(text):
         cleaned_lines.append(' '.join(current_paragraph))
     
     # Join all lines
-    cleaned_text = '\n'.join(cleaned_lines)
-    
-    # Remove multiple consecutive spaces
-    cleaned_text = re.sub(r' +', ' ', cleaned_text)
-    
-    # Remove multiple consecutive newlines (keep max 2)
-    cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
-    
-    # Remove trailing spaces from lines
-    cleaned_text = re.sub(r' +$', '', cleaned_text, flags=re.MULTILINE)
+    cleaned_text = '\n'.join(cleaned_lines) 
     
     return cleaned_text
 
 
 def _convert_pdf_to_text_worker(pdf_file, output_dir):
     """
-    Worker function to convert a single PDF to text with a 10-minute timeout.
+    Worker function to convert a single PDF to text with a 2-minute timeout.
     """
     pdf_path = Path(pdf_file)
     output_path = Path(output_dir)
@@ -98,9 +90,9 @@ def _convert_pdf_to_text_worker(pdf_file, output_dir):
     def handler(signum, frame):
         raise TimeoutError("PDF conversion timed out after 10 minutes")
 
-    # Set the signal handler and a 10-minute (600 seconds) alarm
+    # Set the signal handler and a 2-minute (120 seconds) alarm
     signal.signal(signal.SIGALRM, handler)
-    signal.alarm(600)
+    signal.alarm(120)
 
     try:
         text = pymupdf4llm.to_markdown(str(pdf_path))
@@ -152,6 +144,72 @@ def convert_pdfs_to_text(input_dir, output_dir):
         
         # Process files in parallel
         results = executor.map(convert_func, pdf_files)
+        
+        # Output results
+        for result in results:
+            print(result)
+            
+    print(f"Conversion complete. Text files saved to {output_dir}")
+
+
+def _convert_xml_to_text_worker(xml_file, output_dir):
+    """
+    Worker function to convert a single XML to text.
+    """
+    xml_path = Path(xml_file)
+    output_path = Path(output_dir)
+    filename = xml_path.stem
+    output_file = output_path / f"{filename}.txt"
+
+    if output_file.exists():
+        return f"Skipping {xml_path.name} - {output_file.name} already exists"
+
+    try:
+        tree = ET.parse(xml_file)
+        root = tree.getroot()
+        text = "".join(root.itertext())
+        
+        if text.strip():
+            cleaned_text = clean_text(text)
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(cleaned_text)
+            return f"Successfully converted {xml_path.name}"
+        else:
+            return f"No text content found in {xml_path.name}"
+    except Exception as e:
+        return f"Error converting {xml_path.name}: {str(e)}"
+
+
+def convert_xmls_to_text(input_dir, output_dir):
+    """
+    Convert all XML files in input_dir to text files in output_dir in parallel.
+    
+    Args:
+        input_dir (str): Directory containing XML files to convert
+        output_dir (str): Directory where text files will be saved
+    """
+    input_path = Path(input_dir)
+    output_path = Path(output_dir)
+    
+    if not input_path.exists():
+        raise ValueError(f"Input directory does not exist: {input_dir}")
+
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    xml_files = glob.glob(str(input_path / "**/*.xml"), recursive=True)
+    
+    if not xml_files:
+        print(f"No XML files found in {input_dir}")
+        return
+    
+    print(f"Found {len(xml_files)} XML files to convert")
+    
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        # Create a partial function to pass the output_dir to the worker
+        convert_func = partial(_convert_xml_to_text_worker, output_dir=output_dir)
+        
+        # Process files in parallel
+        results = executor.map(convert_func, xml_files)
         
         # Output results
         for result in results:
@@ -233,4 +291,5 @@ if __name__ == "__main__":
     output_directory = sys.argv[2]
     
     convert_pdfs_to_text(input_directory, output_directory)
+    convert_xmls_to_text(input_directory, output_directory)
     decompose_text_to_paragraphs(output_directory)
