@@ -2,3 +2,4 @@ PyMuPDF
 pandas
 mrkdwn_analysis
 pymupdf4llm
+mlflow

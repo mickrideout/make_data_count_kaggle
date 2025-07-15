@@ -1,6 +1,7 @@
 import os
 import sys
 import pandas as pd
+import mlflow
 
 from make_data_count_kaggle.dataset_classification import dummy_classifier
 from make_data_count_kaggle.dataset_matching import basic_matching, create_empty_candidate_dataset
@@ -16,25 +17,38 @@ if __name__ == "__main__":
     input_directory = sys.argv[1]
     output_directory = sys.argv[2]
     
-    # Dataset preprocessing
-    convert_pdfs_to_markdown(f"{input_directory}/train", output_directory)
-    decompose_text_to_paragraphs(output_directory)
+    with mlflow.start_run():
+        mlflow.log_param("input_directory", input_directory)
+        mlflow.log_param("output_directory", output_directory)
 
-    # Candidate generation
-    create_empty_candidate_dataset(output_directory)
-    basic_matching(output_directory, output_directory, 2)
+        # Dataset preprocessing
+        convert_pdfs_to_markdown(f"{input_directory}/train", output_directory)
+        decompose_text_to_paragraphs(output_directory)
 
-    # Candidate classification
-    output_df = dummy_classifier(output_directory, output_directory)
+        # Candidate generation
+        create_empty_candidate_dataset(output_directory)
+        basic_matching(output_directory, output_directory, 2)
 
-    # Evaluation
-    ground_truth_df = pd.read_csv(f"{input_directory}/train_labels.csv")
-    f1, precision, recall, tp, fp, fn = calculate_f1_score(ground_truth_df, output_df, output_directory)
+        # Candidate classification
+        output_df = dummy_classifier(output_directory, output_directory)
 
-    print(f"F1 Score: {f1}")
-    print(f"Precision: {precision}")
-    print(f"Recall: {recall}")
-    print(f"TP: {tp}, FP: {fp}, FN: {fn}")
+        # Evaluation
+        ground_truth_df = pd.read_csv(f"{input_directory}/train_labels.csv")
+        f1, precision, recall, tp, fp, fn = calculate_f1_score(ground_truth_df, output_df, output_directory)
+
+        print(f"F1 Score: {f1}")
+        print(f"Precision: {precision}")
+        print(f"Recall: {recall}")
+        print(f"TP: {tp}, FP: {fp}, FN: {fn}")
+
+        mlflow.log_metric("f1_score", f1)
+        mlflow.log_metric("precision", precision)
+        mlflow.log_metric("recall", recall)
+        mlflow.log_metric("true_positives", tp)
+        mlflow.log_metric("false_positives", fp)
+        mlflow.log_metric("false_negatives", fn)
+
+
 
 
 
