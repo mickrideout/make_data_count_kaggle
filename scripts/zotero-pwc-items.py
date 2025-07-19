@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+# Given a Zotero collection name, find all items with a Papers with Code link.
+
 import argparse
 import sys
 from typing import Dict, List, Any

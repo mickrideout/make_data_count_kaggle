@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+# Given a Zotero collection name, find all items with a Papers with Code link.
+
 # Download the "All papers with abstracts" from here: https://github.com/paperswithcode/paperswithcode-data and decompress it.
 
 # Pip install these:
