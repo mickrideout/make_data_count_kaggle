@@ -5,9 +5,11 @@ import signal
 import pymupdf4llm
 import xml.etree.ElementTree as ET
 import re
+import pandas as pd
 from pathlib import Path
 import concurrent.futures
 from functools import partial
+import json
 
 
 def clean_text(text):
@@ -278,6 +280,138 @@ def decompose_text_to_paragraphs(output_dir):
             print(result)
             
     print(f"Decomposition complete. Pickle files saved to {output_dir}")
+
+
+def decompose_train_labels(input_dir, output_dir):
+    """
+    Decompose train_labels.csv into training_labels.csv and testing_labels.csv
+    based on whether the article_id exists in train/PDF or test/PDF folders.
+    
+    Args:
+        input_dir (str): Directory containing train_labels.csv and train/test folders
+        output_dir (str): Directory where training_labels.csv and testing_labels.csv will be saved
+    """
+    input_path = Path(input_dir)
+    output_path = Path(output_dir)
+    
+    # Read the train_labels.csv file
+    train_labels_file = input_path / "train_labels.csv"
+    if not train_labels_file.exists():
+        raise ValueError(f"train_labels.csv not found in {input_dir}")
+    
+    df = pd.read_csv(train_labels_file)
+    
+    # Create output directory if it doesn't exist
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Initialize lists for training and testing labels
+    training_rows = []
+    testing_rows = []
+    
+    for _, row in df.iterrows():
+        # Skip rows with Missing in dataset_id or type columns
+        if row['dataset_id'] == 'Missing' or row['type'] == 'Missing':
+            continue
+            
+        article_id = row['article_id']
+        
+        # Check if PDF exists in train folder
+        train_pdf_path = input_path / "train" / "PDF" / f"{article_id}.pdf"
+        test_pdf_path = input_path / "test" / "PDF" / f"{article_id}.pdf"
+        
+        if train_pdf_path.exists():
+            training_rows.append(row)
+        elif test_pdf_path.exists():
+            testing_rows.append(row)
+    
+    # Create DataFrames and save to CSV
+    if training_rows:
+        training_df = pd.DataFrame(training_rows)
+        training_output = output_path / "training_labels.csv"
+        training_df.to_csv(training_output, index=False)
+        print(f"Created training_labels.csv with {len(training_rows)} rows")
+    else:
+        print("No training labels found")
+    
+    if testing_rows:
+        testing_df = pd.DataFrame(testing_rows)
+        testing_output = output_path / "testing_labels.csv"
+        testing_df.to_csv(testing_output, index=False)
+        print(f"Created testing_labels.csv with {len(testing_rows)} rows")
+    else:
+        print("No testing labels found")
+
+
+def convert_labels_csv_to_json(output_dir):
+    """
+    Convert training_labels.csv and testing_labels.csv to JSON format.
+    Groups dataset_ids and types by article_id.
+    
+    Args:
+        output_dir (str): Directory containing the CSV files and where JSON files will be saved
+    """
+    output_path = Path(output_dir)
+    
+    if not output_path.exists():
+        raise ValueError(f"Output directory does not exist: {output_dir}")
+    
+    # Process training labels
+    training_csv = output_path / "training_labels.csv"
+    if training_csv.exists():
+        df = pd.read_csv(training_csv)
+        
+        # Group by article_id
+        grouped = df.groupby('article_id').agg({
+            'dataset_id': list,
+            'type': list
+        }).reset_index()
+        
+        # Convert to list of dictionaries
+        json_data = []
+        for _, row in grouped.iterrows():
+            json_data.append({
+                'article_id': row['article_id'],
+                'dataset_ids': row['dataset_id'],
+                'types': row['type']
+            })
+        
+        # Save to JSON
+        training_json = output_path / "training_labels.json"
+        with open(training_json, 'w', encoding='utf-8') as f:
+            json.dump(json_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"Created training_labels.json with {len(json_data)} articles")
+    else:
+        print("training_labels.csv not found")
+    
+    # Process testing labels
+    testing_csv = output_path / "testing_labels.csv"
+    if testing_csv.exists():
+        df = pd.read_csv(testing_csv)
+        
+        # Group by article_id
+        grouped = df.groupby('article_id').agg({
+            'dataset_id': list,
+            'type': list
+        }).reset_index()
+        
+        # Convert to list of dictionaries
+        json_data = []
+        for _, row in grouped.iterrows():
+            json_data.append({
+                'article_id': row['article_id'],
+                'dataset_ids': row['dataset_id'],
+                'types': row['type']
+            })
+        
+        # Save to JSON
+        testing_json = output_path / "testing_labels.json"
+        with open(testing_json, 'w', encoding='utf-8') as f:
+            json.dump(json_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"Created testing_labels.json with {len(json_data)} articles")
+    else:
+        print("testing_labels.csv not found")
 
 
 if __name__ == "__main__":
