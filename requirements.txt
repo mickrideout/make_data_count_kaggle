@@ -3,3 +3,6 @@ pandas
 mrkdwn_analysis
 pymupdf4llm
 mlflow
+requests
+fuzzywuzzy
+python-Levenshtein
