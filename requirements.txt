@@ -6,3 +6,4 @@ mlflow
 requests
 fuzzywuzzy
 python-Levenshtein
+datasets

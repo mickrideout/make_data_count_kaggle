@@ -5,7 +5,7 @@ import mlflow
 
 from make_data_count_kaggle.dataset_classification import dummy_classifier
 from make_data_count_kaggle.dataset_matching import basic_matching, create_empty_candidate_dataset
-from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_paragraphs, decompose_train_labels, convert_labels_csv_to_json
+from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_paragraphs, decompose_train_labels, convert_labels_csv_to_json, create_huggingface_dataset
 from make_data_count_kaggle.evaluation import calculate_f1_score
 
 
@@ -27,6 +27,7 @@ if __name__ == "__main__":
         convert_xmls_to_text(f"{input_directory}/train", output_directory)
         convert_pdfs_to_text(f"{input_directory}/train", output_directory)
         decompose_text_to_paragraphs(output_directory)
+        dataset_dict = create_huggingface_dataset(output_directory)
 
         # Candidate generation
         create_empty_candidate_dataset(output_directory)

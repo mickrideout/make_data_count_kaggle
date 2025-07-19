@@ -10,6 +10,7 @@ from pathlib import Path
 import concurrent.futures
 from functools import partial
 import json
+from datasets import Dataset, DatasetDict
 
 
 def clean_text(text):
@@ -412,6 +413,66 @@ def convert_labels_csv_to_json(output_dir):
         print(f"Created testing_labels.json with {len(json_data)} articles")
     else:
         print("testing_labels.csv not found")
+
+
+def create_huggingface_dataset(output_dir, train_ratio=0.8):
+    """
+    Convert training_labels.json to a HuggingFace Dataset with train/test split.
+    
+    Args:
+        output_dir (str): Directory containing training_labels.json
+        train_ratio (float): Ratio for train split (default 0.8 for 80/20 split)
+        
+    Returns:
+        DatasetDict: HuggingFace dataset with 'train' and 'test' splits
+    """
+    output_path = Path(output_dir)
+    
+    if not output_path.exists():
+        raise ValueError(f"Output directory does not exist: {output_dir}")
+    
+    # Load the training labels JSON
+    training_json = output_path / "training_labels.json"
+    if not training_json.exists():
+        raise ValueError(f"training_labels.json not found in {output_dir}")
+    
+    with open(training_json, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    print(f"Loaded {len(data)} articles from training_labels.json")
+    
+    # Convert to HuggingFace Dataset format
+    # Flatten the data structure - create one row per (article_id, dataset_id, type) combination
+    flattened_data = []
+    for article in data:
+        article_id = article['article_id']
+        dataset_ids = article['dataset_ids']
+        types = article['types']
+        
+        # Create one row for each dataset in the article
+        for dataset_id, dataset_type in zip(dataset_ids, types):
+            flattened_data.append({
+                'article_id': article_id,
+                'dataset_id': dataset_id,
+                'type': dataset_type
+            })
+    
+    print(f"Flattened to {len(flattened_data)} dataset citations")
+    
+    # Create HuggingFace Dataset
+    dataset = Dataset.from_list(flattened_data)
+    
+    # Create train/test split
+    train_test_split = dataset.train_test_split(train_size=train_ratio, seed=42)
+    
+    dataset_dict = DatasetDict({
+        'train': train_test_split['train'],
+        'test': train_test_split['test']
+    })
+    
+    print(f"Created dataset with {len(dataset_dict['train'])} training examples and {len(dataset_dict['test'])} test examples")
+    
+    return dataset_dict
 
 
 if __name__ == "__main__":
