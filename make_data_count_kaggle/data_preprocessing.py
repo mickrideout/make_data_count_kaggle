@@ -345,11 +345,11 @@ def decompose_train_labels(input_dir, output_dir):
 
 def convert_labels_csv_to_json(output_dir):
     """
-    Convert training_labels.csv and testing_labels.csv to JSON format.
-    Groups dataset_ids and types by article_id.
+    Convert training_labels.csv to JSON format with dataset_mentions structure.
+    Creates a JSON array where each article has an array of dataset_mentions objects.
     
     Args:
-        output_dir (str): Directory containing the CSV files and where JSON files will be saved
+        output_dir (str): Directory containing training_labels.csv and where training_labels.json will be saved
     """
     output_path = Path(output_dir)
     
@@ -358,61 +358,40 @@ def convert_labels_csv_to_json(output_dir):
     
     # Process training labels
     training_csv = output_path / "training_labels.csv"
-    if training_csv.exists():
-        df = pd.read_csv(training_csv)
-        
-        # Group by article_id
-        grouped = df.groupby('article_id').agg({
-            'dataset_id': list,
-            'type': list
-        }).reset_index()
-        
-        # Convert to list of dictionaries
-        json_data = []
-        for _, row in grouped.iterrows():
-            json_data.append({
-                'article_id': row['article_id'],
-                'dataset_ids': row['dataset_id'],
-                'types': row['type']
-            })
-        
-        # Save to JSON
-        training_json = output_path / "training_labels.json"
-        with open(training_json, 'w', encoding='utf-8') as f:
-            json.dump(json_data, f, indent=2, ensure_ascii=False)
-        
-        print(f"Created training_labels.json with {len(json_data)} articles")
-    else:
-        print("training_labels.csv not found")
+    if not training_csv.exists():
+        raise ValueError(f"training_labels.csv not found in {output_dir}")
     
-    # Process testing labels
-    testing_csv = output_path / "testing_labels.csv"
-    if testing_csv.exists():
-        df = pd.read_csv(testing_csv)
+    df = pd.read_csv(training_csv)
+    
+    # Group by article_id to create the JSON structure
+    json_data = []
+    
+    for article_id in df['article_id'].unique():
+        # Get all datasets for this article
+        article_datasets = df[df['article_id'] == article_id]
         
-        # Group by article_id
-        grouped = df.groupby('article_id').agg({
-            'dataset_id': list,
-            'type': list
-        }).reset_index()
-        
-        # Convert to list of dictionaries
-        json_data = []
-        for _, row in grouped.iterrows():
-            json_data.append({
-                'article_id': row['article_id'],
-                'dataset_ids': row['dataset_id'],
-                'types': row['type']
+        # Create dataset_mentions array
+        dataset_mentions = []
+        for _, row in article_datasets.iterrows():
+            dataset_mentions.append({
+                "dataset_name": row['dataset_id'],
+                "dataset_type": row['type']
             })
         
-        # Save to JSON
-        testing_json = output_path / "testing_labels.json"
-        with open(testing_json, 'w', encoding='utf-8') as f:
-            json.dump(json_data, f, indent=2, ensure_ascii=False)
+        # Create article object
+        article_obj = {
+            "article_id": article_id,
+            "dataset_mentions": dataset_mentions
+        }
         
-        print(f"Created testing_labels.json with {len(json_data)} articles")
-    else:
-        print("testing_labels.csv not found")
+        json_data.append(article_obj)
+    
+    # Save to JSON
+    training_json = output_path / "training_labels.json"
+    with open(training_json, 'w', encoding='utf-8') as f:
+        json.dump(json_data, f, indent=2, ensure_ascii=False)
+    
+    print(f"Created training_labels.json with {len(json_data)} articles")
 
 
 def create_huggingface_dataset(output_dir, train_ratio=0.8):
@@ -446,15 +425,14 @@ def create_huggingface_dataset(output_dir, train_ratio=0.8):
     flattened_data = []
     for article in data:
         article_id = article['article_id']
-        dataset_ids = article['dataset_ids']
-        types = article['types']
+        dataset_mentions = article['dataset_mentions']
         
         # Create one row for each dataset in the article
-        for dataset_id, dataset_type in zip(dataset_ids, types):
+        for mention in dataset_mentions:
             flattened_data.append({
                 'article_id': article_id,
-                'dataset_id': dataset_id,
-                'type': dataset_type
+                'dataset_id': mention['dataset_name'],
+                'type': mention['dataset_type']
             })
     
     print(f"Flattened to {len(flattened_data)} dataset citations")

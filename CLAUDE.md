@@ -52,7 +52,7 @@ pip install -r requirements.txt
 ### Training Pipeline
 ```bash
 python train.py <input_dir> <output_dir>
-# Example: python train.py /path/to/provided/data /path/to/output
+# Example: python /home/mick/src/kaggle/make_data_count_kaggle/train.py /home/mick/data/make-data-count/data/provided/ /home/mick/tmp/make-data-count/
 ```
 
 ### Inference Pipeline
