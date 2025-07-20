@@ -1,10 +1,14 @@
 import os
 import json
 from pathlib import Path
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, BitsAndBytesConfig
 from trl import SFTTrainer
-from datasets import Dataset
+from peft import LoraConfig, get_peft_model
+from datasets import Dataset as HFDataset
 import torch
+from pydantic import BaseModel, Field
+from typing import List
+import re
 
 prompt_text = """
 
@@ -70,10 +74,15 @@ Each extracted dataset should have the following fields:
 ## Text
 {article_text}
 
-## Response
-
 
 """
+
+class Dataset(BaseModel):
+    dataset_name: str = Field(description="The name of the dataset")
+    dataset_type: str = Field(description="The type of the dataset")
+
+class Response(BaseModel):
+    datasets: List[Dataset] = Field(description="The list of datasets")
 
 
 def load_article_text(article_id, output_dir):
@@ -104,7 +113,7 @@ def create_training_dataset(dataset_dict, output_dir):
         output_dir (str): Directory containing article text files
         
     Returns:
-        Dataset: HuggingFace dataset with article_id and completion data
+        HFDataset: HuggingFace dataset with article_id and completion data
     """
     training_data = []
     
@@ -131,7 +140,7 @@ def create_training_dataset(dataset_dict, output_dir):
         else:
             print(f"Warning: Article text not found for {article_id}, skipping")
     
-    return Dataset.from_list(training_data)
+    return HFDataset.from_list(training_data)
 
 
 def train_causal_model(dataset_dict, output_dir, model_output_dir):
@@ -147,17 +156,40 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
     model_output_path = Path(model_output_dir)
     model_output_path.mkdir(parents=True, exist_ok=True)
     
-    # Load model and tokenizer
-    model_name = "microsoft/DialoGPT-small"  # Use smaller model for stability
+    # Load model and tokenizer with larger context window
+    model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"  # Large context window, instruct tuned
     print(f"Loading model and tokenizer: {model_name}")
     
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # Use 4-bit quantization to reduce memory usage
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+    )
+    
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        torch_dtype=torch.float32,  # Use float32 to avoid precision issues
-        device_map=None,  # Force CPU mode for stability
-        low_cpu_mem_usage=True
+        quantization_config=bnb_config,
+        device_map='auto',  # Auto device mapping
+        trust_remote_code=True
     )
+    
+    # Add LoRA adapters for memory-efficient fine-tuning
+    peft_config = LoraConfig(
+        lora_alpha=16,
+        lora_dropout=0.1,
+        r=64,
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    )
+    
+    model = get_peft_model(model, peft_config)
+    
+    # Enable gradients for LoRA parameters
+    model.enable_input_require_grads()
     
     # Set padding token
     if tokenizer.pad_token is None:
@@ -181,26 +213,30 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
             # Fallback if article text is missing
             return f"{prompt_text.replace('{article_text}', '[Article text not found]')}{example['completion']}"
     
-    # Training arguments
+    # Training arguments optimized for LoRA + quantization
     training_args = TrainingArguments(
         output_dir=str(model_output_path),
         overwrite_output_dir=True,
-        num_train_epochs=1,  # Reduce epochs for initial testing
-        per_device_train_batch_size=1,
-        per_device_eval_batch_size=1,
-        warmup_steps=50,  # Reduce warmup steps
-        logging_steps=10,
-        save_steps=500,
-        save_total_limit=2,
+        num_train_epochs=3,  # More epochs since LoRA needs more training
+        per_device_train_batch_size=2,  # Can increase with quantization
+        per_device_eval_batch_size=2,
+        gradient_accumulation_steps=4,  # Effective batch size = 2*4 = 8
+        warmup_steps=20,
+        logging_steps=5,
+        save_steps=100,
+        save_total_limit=1,  # Keep only 1 checkpoint
         remove_unused_columns=False,
         dataloader_pin_memory=False,
-        gradient_checkpointing=False,  # Disable gradient checkpointing
-        fp16=False,
+        gradient_checkpointing=True,  # Enable to save memory
+        bf16=True,  # Use bf16
         max_grad_norm=1.0,  # Add gradient clipping
         report_to=None,  # Disable wandb logging
+        dataloader_num_workers=0,  # Disable multiprocessing
+        optim="paged_adamw_32bit",  # Memory-efficient optimizer
+        learning_rate=2e-4,  # Higher learning rate for LoRA
     )
     
-    # Create SFTTrainer
+    # Create SFTTrainer with basic parameters
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -220,3 +256,190 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
     print("Model training completed successfully!")
     
     return str(model_output_path)
+
+
+def run_inference(dataset_dict, output_dir, model_dir):
+    """
+    Run inference on test dataset using the trained causal model.
+    
+    Args:
+        dataset_dict: HuggingFace DatasetDict containing train/test splits
+        output_dir (str): Directory containing article text files
+        model_dir (str): Directory containing the trained model
+        
+    Returns:
+        List[Response]: List of Response objects with extracted datasets for each article
+    """
+    model_path = Path(model_dir)
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model directory not found: {model_path}")
+    
+    # Load trained model and tokenizer with same quantization as training
+    print(f"Loading trained model from {model_path}")
+    
+    # Use 4-bit quantization to reduce memory usage (same as training)
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+    )
+    
+    tokenizer = AutoTokenizer.from_pretrained(str(model_path))
+    model = AutoModelForCausalLM.from_pretrained(
+        str(model_path),
+        quantization_config=bnb_config,
+        torch_dtype=torch.bfloat16,
+        device_map='auto',  # Enable automatic device mapping
+        low_cpu_mem_usage=True
+    )
+    
+    # Device will be set automatically by device_map='auto'
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Set padding token if not set
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    # Get unique article IDs from test dataset
+    test_article_ids = list(set(item['article_id'] for item in dataset_dict['test']))
+    
+    results = []
+    
+    for article_id in test_article_ids:
+        try:
+            # Load article text
+            article_text = load_article_text(article_id, output_dir)
+            
+            # Create prompt
+            prompt = prompt_text.replace('{article_text}', article_text)
+            
+            # Create prompt without truncation
+            prompt = prompt_text.replace('{article_text}', article_text)
+            
+            # Tokenize with limits appropriate for 16384 token limit
+            inputs = tokenizer(
+                prompt, 
+                return_tensors="pt", 
+                truncation=True, 
+                padding=False  # No padding to avoid issues
+            )
+            
+            # Move inputs to GPU device
+            device = next(model.parameters()).device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            
+            # Create attention mask manually
+            inputs['attention_mask'] = torch.ones_like(inputs['input_ids'])
+            
+            # Check if input is too long (should not happen due to truncation)
+                # Generate response with very conservative settings
+            with torch.no_grad():
+                try:
+                    outputs = model.generate(
+                        inputs['input_ids'],
+                        attention_mask=inputs['attention_mask'],
+                        max_new_tokens=512,  # More room for JSON response
+                        do_sample=False,    # Greedy decoding
+                        pad_token_id=tokenizer.eos_token_id,
+                        eos_token_id=tokenizer.eos_token_id,
+                        num_return_sequences=1
+                    )
+                    
+                    # Decode generated text safely
+                    # Check the shape of outputs tensor
+                    if outputs.dim() > 1 and outputs.shape[0] > 0:
+                        # outputs is [batch_size, sequence_length], take first batch
+                        generated_tokens = outputs[0]
+                    else:
+                        # outputs is already 1D or empty
+                        generated_tokens = outputs
+                    
+                    # Get input length to extract only new tokens
+                    input_length = inputs['input_ids'].shape[1]
+                    
+                    # Extract only the newly generated tokens
+                    if generated_tokens.shape[0] > input_length:
+                        new_tokens = generated_tokens[input_length:]
+                        response_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+                    else:
+                        response_text = ""
+                    
+                    # Parse JSON response
+                    datasets = parse_model_response(response_text)
+                    
+                except Exception as gen_error:
+                    print(f"Generation error for {article_id}: {gen_error}")
+                    import traceback
+                    traceback.print_exc()
+                    print(f"Input shape: {inputs['input_ids'].shape}")
+                    print(f"Input length: {inputs['input_ids'].shape[1]}")
+                    datasets = []
+            
+            # Create Response object with pydantic validation
+            response = Response(datasets=datasets)
+            results.append({
+                'article_id': article_id,
+                'response': response
+            })
+            
+            print(f"Processed article {article_id}: found {len(datasets)} datasets")
+            
+        except Exception as e:
+            print(f"Error processing article {article_id}: {e}")
+            # Create empty response for failed articles
+            response = Response(datasets=[])
+            results.append({
+                'article_id': article_id,
+                'response': response
+            })
+    
+    return results
+
+
+def parse_model_response(response_text):
+    """
+    Parse the model's JSON response and extract datasets.
+    Handles Deepseek R1's <think> tags by extracting only the JSON portion.
+    
+    Args:
+        response_text (str): Generated response from the model
+        
+    Returns:
+        List[Dataset]: List of Dataset objects
+    """
+    try:
+        # Remove <think> tags and their content first
+        clean_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL)
+        
+        # Also handle unclosed think tags
+        clean_text = re.sub(r'<think>.*$', '', clean_text, flags=re.DOTALL)
+        
+        # Try to find JSON array in the cleaned response
+        json_match = re.search(r'\[.*?\]', clean_text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            datasets_data = json.loads(json_str)
+            
+            # Convert to Dataset objects
+            datasets = []
+            for item in datasets_data:
+                if isinstance(item, dict) and 'dataset_name' in item and 'dataset_type' in item:
+                    dataset = Dataset(
+                        dataset_name=item['dataset_name'],
+                        dataset_type=item['dataset_type']
+                    )
+                    datasets.append(dataset)
+            
+            return datasets
+        else:
+            print(f"No valid JSON found in response after cleaning: {clean_text[:200]}...")
+            return []
+            
+    except json.JSONDecodeError as e:
+        print(f"JSON decode error: {e}")
+        print(f"Cleaned response text: {clean_text[:200] if 'clean_text' in locals() else response_text[:200]}...")
+        return []
+    except Exception as e:
+        print(f"Error parsing response: {e}")
+        return []
