@@ -7,3 +7,9 @@ requests
 fuzzywuzzy
 python-Levenshtein
 datasets
+transformers
+trl
+torch
+accelerate
+bitsandbytes
+peft

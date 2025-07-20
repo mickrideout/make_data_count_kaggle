@@ -7,11 +7,12 @@ from make_data_count_kaggle.dataset_classification import dummy_classifier
 from make_data_count_kaggle.dataset_matching import basic_matching, create_empty_candidate_dataset
 from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_paragraphs, decompose_train_labels, convert_labels_csv_to_json, create_huggingface_dataset
 from make_data_count_kaggle.evaluation import calculate_f1_score
+from make_data_count_kaggle.causal_model import train_causal_model
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python infer.py <input_dir> <output_dir>")
+        print("Usage: python train.py <input_dir> <output_dir>")
         sys.exit(1)
     
     input_directory = sys.argv[1]
@@ -28,6 +29,10 @@ if __name__ == "__main__":
         convert_pdfs_to_text(f"{input_directory}/train", output_directory)
         decompose_text_to_paragraphs(output_directory)
         dataset_dict = create_huggingface_dataset(output_directory)
+
+        # Causal model training
+        causal_model_dir = f"{output_directory}/causal_model"
+        train_causal_model(dataset_dict, output_directory, causal_model_dir)
 
         # Candidate generation
         create_empty_candidate_dataset(output_directory)
