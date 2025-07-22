@@ -5,7 +5,7 @@ import mlflow
 
 from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_paragraphs, decompose_train_labels, convert_labels_csv_to_json, create_huggingface_dataset
 from make_data_count_kaggle.evaluation import calculate_f1_score
-from make_data_count_kaggle.causal_model import train_causal_model, run_inference
+from make_data_count_kaggle.causal_model import train_causal_model, run_inference, MODEL_NAME
 
 
 if __name__ == "__main__":
@@ -74,6 +74,7 @@ if __name__ == "__main__":
         mlflow.log_metric("true_positives", tp)
         mlflow.log_metric("false_positives", fp)
         mlflow.log_metric("false_negatives", fn)
+        mlflow.log_param("model_name", MODEL_NAME)
 
 
 

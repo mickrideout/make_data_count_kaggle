@@ -14,6 +14,7 @@ import torch
 #microsoft/Phi-4-mini-instruct
 #microsoft/Phi-4-reasoning
 #prithivMLmods/Galactic-Qwen-14B-Exp2
+#ibm-granite/granite-3.2-8b-instruct
 def load_model(model_name):
     """Load the Hugging Face model and tokenizer with memory optimization."""
     print(f"Loading model: {model_name}")

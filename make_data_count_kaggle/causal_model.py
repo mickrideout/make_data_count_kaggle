@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 from typing import List
 import re
 
-model_name = "prithivMLmods/Galactic-Qwen-14B-Exp2"
+#model_name = "Yuma42/Llama3.1-SuperHawk-8B"
+#MODEL_NAME = "ibm-granite/granite-3.2-8b-instruct"
+MODEL_NAME = "microsoft/Phi-4-mini-instruct"
 MAX_NEW_TOKENS = 4000
 
 # Try to import Outlines, but handle gracefully if not available
@@ -177,7 +179,7 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
     
     # Load model and tokenizer with larger context window
   # Large context window, instruct tuned
-    print(f"Loading model and tokenizer: {model_name}")
+    print(f"Loading model and tokenizer: {MODEL_NAME}")
     
     # Use 4-bit quantization to reduce memory usage
     bnb_config = BitsAndBytesConfig(
@@ -187,9 +189,9 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
         bnb_4bit_use_double_quant=True,
     )
     
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
-        model_name,
+        MODEL_NAME,
         quantization_config=bnb_config,
         device_map='auto',  # Auto device mapping
         trust_remote_code=True
@@ -289,13 +291,35 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
     print("Starting model training...")
     trainer.train()
     
-    # Save final model
+    # Save final model - merge LoRA adapters with base model for Kaggle offline compatibility
     print(f"Saving trained model to {model_output_path}")
     if model_output_path.exists():
         import shutil
         shutil.rmtree(model_output_path)
-    trainer.save_model(str(model_output_path))
-    tokenizer.save_pretrained(str(model_output_path))
+    
+    # First save the LoRA adapters
+    adapter_path = model_output_path / "adapters"
+    adapter_path.mkdir(parents=True, exist_ok=True)
+    trainer.save_model(str(adapter_path))
+    
+    # Merge LoRA adapters with base model for standalone inference
+    print("Merging LoRA adapters with base model for offline compatibility...")
+    try:
+        merged_model = model.merge_and_unload()
+        # Save the merged model
+        merged_model.save_pretrained(str(model_output_path), safe_serialization=True)
+        tokenizer.save_pretrained(str(model_output_path))
+        print("Successfully saved merged model for offline use")
+    except Exception as e:
+        print(f"Warning: Failed to merge model ({e}). Saving adapters only.")
+        # Fallback: save adapters and base model config
+        trainer.save_model(str(model_output_path))
+        tokenizer.save_pretrained(str(model_output_path))
+        
+        # Save base model name for reference
+        config_file = model_output_path / "base_model.txt"
+        with open(config_file, 'w') as f:
+            f.write(MODEL_NAME)
     
     print("Model training completed successfully!")
     
@@ -506,28 +530,57 @@ def run_inference(dataset_dict, output_dir, model_dir):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # Load model with error handling
+    # Load model with error handling - try merged model first, then adapters
     try:
+        # Try loading merged model first (preferred for Kaggle offline)
         model = AutoModelForCausalLM.from_pretrained(
             model_dir,
             quantization_config=bnb_config,
-            torch_dtype=torch.bfloat16,
-            device_map='auto',  # Enable automatic device mapping
-            low_cpu_mem_usage=True,
-            trust_remote_code=True,
-            local_files_only=True
-        )
-    except Exception as e:
-        print(f"Error loading model with quantization: {e}")
-        print("Attempting to load model without quantization...")
-        model = AutoModelForCausalLM.from_pretrained(
-            model_dir,
             torch_dtype=torch.bfloat16,
             device_map='auto',
             low_cpu_mem_usage=True,
             trust_remote_code=True,
             local_files_only=True
         )
+        print("Successfully loaded merged model")
+    except Exception as e:
+        print(f"Failed to load merged model: {e}")
+        # Fallback: try loading base model + adapters
+        base_model_file = Path(model_dir) / "base_model.txt"
+        if base_model_file.exists():
+            with open(base_model_file, 'r') as f:
+                base_model_name = f.read().strip()
+            print(f"Attempting to load base model + adapters: {base_model_name}")
+            try:
+                # This would require internet access in Kaggle - not ideal
+                model = AutoModelForCausalLM.from_pretrained(
+                    base_model_name,
+                    quantization_config=bnb_config,
+                    torch_dtype=torch.bfloat16,
+                    device_map='auto',
+                    trust_remote_code=True
+                )
+                # Load adapters
+                from peft import PeftModel
+                model = PeftModel.from_pretrained(model, model_dir)
+                print("Successfully loaded base model + adapters")
+            except Exception as adapter_error:
+                print(f"Failed to load base model + adapters: {adapter_error}")
+                raise RuntimeError(f"Cannot load model from {model_dir}. Ensure merged model was saved properly.")
+        else:
+            # Try without quantization as final fallback
+            try:
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_dir,
+                    torch_dtype=torch.bfloat16,
+                    device_map='auto',
+                    low_cpu_mem_usage=True,
+                    trust_remote_code=True,
+                    local_files_only=True
+                )
+                print("Successfully loaded model without quantization")
+            except Exception as final_error:
+                raise RuntimeError(f"All model loading attempts failed: {final_error}")
     
     # Optimize model for inference
     model.eval()  # Set to evaluation mode
