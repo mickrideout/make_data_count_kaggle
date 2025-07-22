@@ -291,7 +291,10 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
     
     # Save final model
     print(f"Saving trained model to {model_output_path}")
-    trainer.save_model()
+    if model_output_path.exists():
+        import shutil
+        shutil.rmtree(model_output_path)
+    trainer.save_model(str(model_output_path))
     tokenizer.save_pretrained(str(model_output_path))
     
     print("Model training completed successfully!")
@@ -808,7 +811,7 @@ def run_inference_simple(dataset_dict, output_dir, model_dir):
             bnb_4bit_use_double_quant=True,
         )
         model = AutoModelForCausalLM.from_pretrained(
-            str(model_path),
+            model_dir,
             quantization_config=bnb_config,
             torch_dtype=torch.bfloat16,
             device_map='auto',
@@ -820,7 +823,7 @@ def run_inference_simple(dataset_dict, output_dir, model_dir):
         print(f"Error loading model with quantization: {e}")
         print("Attempting to load model without quantization...")
         model = AutoModelForCausalLM.from_pretrained(
-            str(model_path),
+            model_dir,
             torch_dtype=torch.bfloat16,
             device_map='auto',
             low_cpu_mem_usage=True,
@@ -828,7 +831,7 @@ def run_inference_simple(dataset_dict, output_dir, model_dir):
             local_files_only=True
         )
     
-    tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
