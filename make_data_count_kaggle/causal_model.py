@@ -497,7 +497,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
         bnb_4bit_use_double_quant=True,
     )
     
-    tokenizer = AutoTokenizer.from_pretrained(str(model_path))
+    tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
     
     # Ensure tokenizer has proper configuration
     if tokenizer.pad_token is None:
@@ -813,7 +813,8 @@ def run_inference_simple(dataset_dict, output_dir, model_dir):
             torch_dtype=torch.bfloat16,
             device_map='auto',
             low_cpu_mem_usage=True,
-            trust_remote_code=True
+            trust_remote_code=True,
+            local_files_only=True
         )
     except Exception as e:
         print(f"Error loading model with quantization: {e}")
@@ -823,10 +824,11 @@ def run_inference_simple(dataset_dict, output_dir, model_dir):
             torch_dtype=torch.bfloat16,
             device_map='auto',
             low_cpu_mem_usage=True,
-            trust_remote_code=True
+            trust_remote_code=True,
+            local_files_only=True
         )
     
-    tokenizer = AutoTokenizer.from_pretrained(str(model_path))
+    tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
