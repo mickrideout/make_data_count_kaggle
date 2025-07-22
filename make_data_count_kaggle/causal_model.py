@@ -500,7 +500,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
         bnb_4bit_use_double_quant=True,
     )
     
-    tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
     
     # Ensure tokenizer has proper configuration
     if tokenizer.pad_token is None:
@@ -509,7 +509,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
     # Load model with error handling
     try:
         model = AutoModelForCausalLM.from_pretrained(
-            str(model_path),
+            model_dir,
             quantization_config=bnb_config,
             torch_dtype=torch.bfloat16,
             device_map='auto',  # Enable automatic device mapping
@@ -521,7 +521,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
         print(f"Error loading model with quantization: {e}")
         print("Attempting to load model without quantization...")
         model = AutoModelForCausalLM.from_pretrained(
-            str(model_path),
+            model_dir,
             torch_dtype=torch.bfloat16,
             device_map='auto',
             low_cpu_mem_usage=True,
