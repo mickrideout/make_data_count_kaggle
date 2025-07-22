@@ -10,6 +10,16 @@ from pydantic import BaseModel, Field
 from typing import List
 import re
 
+model_name = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+
+# Try to import Outlines, but handle gracefully if not available
+try:
+    from outlines import models, Generator
+    OUTLINES_AVAILABLE = True
+except ImportError:
+    print("Warning: Outlines library not available. Structured generation will be disabled.")
+    OUTLINES_AVAILABLE = False
+
 prompt_text = """
 
 You are an expert in extracting and categorizing dataset mentions from research papers and policy documents. Your task is to **identify and extract all valid dataset mentions** and ensure their type is correctly classified. You to read, parse and then perform the extraction of the text in the ## **Text** section below. Provide your reponse in json format defined in the section ### **Extraction Schema**
@@ -28,7 +38,8 @@ A dataset is a structured collection of data used for empirical research, analys
 - **DOI Reference** is used to reference both datasets and papers. They are of the form  https://doi.org/[prefix]/[suffix] an example being https://doi.org/10.1371/journal.pone.0303785.
 
 **Important:**  
-If the dataset does not fit into the examples above, infer the **most appropriate category** from the context and **create a new `"data_type"` if necessary**.
+- If the dataset does not fit into the examples above, infer the **most appropriate category** from the context and **create a new `"data_type"` if necessary**.
+- The final line of your response **MUST** be a json array of the datasets.
 
 ### **What Should NOT Be Extracted?**
 - Do **not** extract mentions that do not explicitly refer to a dataset by name, or a dataset by DOI reference.
@@ -59,21 +70,25 @@ Each extracted dataset should have the following fields:
 ### **Example Response**
 - If no datasets are found, return an empty json list `[]`.
 - An example response is:
-[
-    {
-        "dataset_name": "LSMS-ISA",
-        "dataset_type": "Primary"
-    },
-    {
-        "dataset_name": "https://doi.org/10.1371/journal.pone.0303785",
-        "dataset_type": "Secondary"
-    }
-]
+{
+    "datasets": 
+    [
+        {
+            "dataset_name": "LSMS-ISA",
+            "dataset_type": "Primary"
+        },
+        {
+            "dataset_name": "https://doi.org/10.1371/journal.pone.0303785",
+            "dataset_type": "Secondary"
+        }
+    ]
+}
 
 
 ## Text
 {article_text}
 
+## Json Response:
 
 """
 
@@ -127,6 +142,9 @@ def create_training_dataset(dataset_dict, output_dir):
             "dataset_name": item['dataset_id'],
             "dataset_type": item['type']
         })
+        response = {
+            "datasets": article_datasets[article_id]
+        }
     
     # Create dataset with just article_id and expected output
     for article_id, datasets in article_datasets.items():
@@ -135,7 +153,7 @@ def create_training_dataset(dataset_dict, output_dir):
         if text_file.exists():
             training_data.append({
                 'article_id': article_id,
-                'completion': json.dumps(datasets, indent=2)
+                'completion': json.dumps(response, indent=2)
             })
         else:
             print(f"Warning: Article text not found for {article_id}, skipping")
@@ -157,7 +175,7 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
     model_output_path.mkdir(parents=True, exist_ok=True)
     
     # Load model and tokenizer with larger context window
-    model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"  # Large context window, instruct tuned
+  # Large context window, instruct tuned
     print(f"Loading model and tokenizer: {model_name}")
     
     # Use 4-bit quantization to reduce memory usage
@@ -258,6 +276,148 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
     return str(model_output_path)
 
 
+def test_outlines_integration(model, tokenizer):
+    """
+    Test Outlines integration with a simple prompt to verify it's working correctly.
+    
+    Args:
+        model: The loaded model
+        tokenizer: The loaded tokenizer
+        
+    Returns:
+        bool: True if Outlines integration works, False otherwise
+    """
+    if not OUTLINES_AVAILABLE:
+        print("Outlines not available, skipping integration test")
+        return False
+    
+    try:
+        print("Testing Outlines integration...")
+        outlines_model = models.from_transformers(model, tokenizer)
+        json_generator = Generator(outlines_model, Response)
+        
+        # Simple test prompt
+        test_prompt = prompt_text.replace('{article_text}', "This paper uses LSMS-ISA data for analysis.")
+        
+        response = json_generator(test_prompt)
+        print(f"Test response type: {type(response)}")
+        print(f"Test response: {response}")
+        
+        # Validate response format
+        if isinstance(response, str):
+            try:
+                parsed = json.loads(response)
+                print(f"Successfully parsed string response as JSON: {parsed}")
+                return True
+            except json.JSONDecodeError:
+                print(f"Failed to parse string response as JSON: {response}")
+                return False
+        elif hasattr(response, 'datasets') or isinstance(response, (dict, list)):
+            print(f"Response has expected format: {type(response)}")
+            return True
+        else:
+            print(f"Unexpected response format: {type(response)}")
+            return False
+            
+    except Exception as e:
+        print(f"Outlines integration test failed: {e}")
+        return False
+
+
+def parse_model_response(response_text):
+    """
+    Parse model response text to extract datasets.
+    
+    Args:
+        response_text (str): The generated response text
+        
+    Returns:
+        List[Dataset]: List of extracted datasets
+    """
+    datasets = []
+    try:
+        # Look for JSON array in the response
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            parsed_data = json.loads(json_str)
+            if isinstance(parsed_data, list):
+                for item in parsed_data:
+                    if isinstance(item, dict) and 'dataset_name' in item and 'dataset_type' in item:
+                        datasets.append(Dataset(
+                            dataset_name=item['dataset_name'],
+                            dataset_type=item['dataset_type']
+                        ))
+                print(f"Extracted {len(datasets)} datasets from response")
+            else:
+                print(f"Parsed data is not a list: {type(parsed_data)}")
+        else:
+            print(f"No JSON array found in response")
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse JSON from response: {e}")
+    except Exception as e:
+        print(f"Error parsing response: {e}")
+    
+    return datasets
+
+
+def debug_outlines_response(model, tokenizer, test_text):
+    """
+    Debug Outlines response generation with detailed logging.
+    
+    Args:
+        model: The loaded model
+        tokenizer: The loaded tokenizer
+        test_text (str): Test text to use
+        
+    Returns:microsoft/Phi-4-mini-instruct
+    """
+    if not OUTLINES_AVAILABLE:
+        return {"error": "Outlines not available"}
+    
+    debug_info = {}
+    
+    try:
+        print("Creating Outlines model...")
+        outlines_model = models.from_transformers(model, tokenizer)
+        print("✓ Outlines model created")
+        
+        print("Creating JSON generator...")
+        json_generator = Generator(outlines_model, Response)
+        print("✓ JSON generator created")
+        
+        # Create test prompt
+        test_prompt = prompt_text.replace('{article_text}', test_text)
+        print(f"Test prompt length: {len(test_prompt)} characters")
+        
+        print("Generating response...")
+        response = json_generator(test_prompt)
+        
+        debug_info["response_type"] = type(response).__name__
+        debug_info["response_str"] = str(response)[:500]
+        
+        print(f"Response type: {type(response)}")
+        print(f"Response: {str(response)[:200]}...")
+        
+        # Try different parsing approaches
+        if isinstance(response, str):
+            try:
+                parsed = json.loads(response)
+                debug_info["parsed_json"] = parsed
+                print(f"✓ Successfully parsed as JSON: {parsed}")
+            except json.JSONDecodeError as e:
+                debug_info["json_error"] = str(e)
+                print(f"✗ Failed to parse as JSON: {e}")
+        
+        return debug_info
+        
+    except Exception as e:
+        debug_info["error"] = str(e)
+        debug_info["error_type"] = type(e).__name__
+        print(f"✗ Error in debug_outlines_response: {e}")
+        return debug_info
+
+
 def run_inference(dataset_dict, output_dir, model_dir):
     """
     Run inference on test dataset using the trained causal model.
@@ -286,18 +446,226 @@ def run_inference(dataset_dict, output_dir, model_dir):
     )
     
     tokenizer = AutoTokenizer.from_pretrained(str(model_path))
-    model = AutoModelForCausalLM.from_pretrained(
-        str(model_path),
-        quantization_config=bnb_config,
-        torch_dtype=torch.bfloat16,
-        device_map='auto',  # Enable automatic device mapping
-        low_cpu_mem_usage=True
-    )
     
-    # Device will be set automatically by device_map='auto'
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Ensure tokenizer has proper configuration
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     
-    # Set padding token if not set
+    # Load model with error handling
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            str(model_path),
+            quantization_config=bnb_config,
+            torch_dtype=torch.bfloat16,
+            device_map='auto',  # Enable automatic device mapping
+            low_cpu_mem_usage=True,
+            trust_remote_code=True
+        )
+    except Exception as e:
+        print(f"Error loading model with quantization: {e}")
+        print("Attempting to load model without quantization...")
+        model = AutoModelForCausalLM.from_pretrained(
+            str(model_path),
+            torch_dtype=torch.bfloat16,
+            device_map='auto',
+            low_cpu_mem_usage=True,
+            trust_remote_code=True
+        )
+    
+    # Test Outlines integration first
+    outlines_working = test_outlines_integration(model, tokenizer)
+    if not outlines_working:
+        print("Outlines integration failed, will use free-form generation only")
+    
+    # Get unique article IDs from test dataset
+    test_article_ids = list(set(item['article_id'] for item in dataset_dict['test']))
+    
+    results = []
+    
+    for article_id in test_article_ids:
+        try:
+            # Load article text
+            article_text = load_article_text(article_id, output_dir)
+            
+            # Create prompt
+            prompt = prompt_text.replace('{article_text}', article_text)
+            
+            # Try structured generation first with retry logic (only if Outlines is available)
+            datasets = []
+            structured_success = False
+            raw_response_text = ""
+            
+            if OUTLINES_AVAILABLE:
+                for attempt in range(1):  # Try up to 3 times
+                    try:
+                        # Create fresh Outlines model and generator for each attempt
+                        outlines_model = models.from_transformers(model, tokenizer)
+                        json_generator = Generator(outlines_model, Response)
+                        
+                        print(f"Attempting structured generation for {article_id} (attempt {attempt + 1})")
+                        response = json_generator(prompt)
+                        print(f"Raw response type: {type(response)}")
+                        print(f"Raw response: {str(response)[:200]}...")
+                        
+                        # Store raw response text
+                        raw_response_text = str(response)
+                        
+                        # Handle different response types
+                        datasets = []
+                        if hasattr(response, 'datasets'):
+                            datasets = response.datasets
+                        elif isinstance(response, dict) and 'datasets' in response:
+                            datasets = response['datasets']
+                        elif isinstance(response, list):
+                            datasets = response
+                        elif isinstance(response, str):
+                            # Try to parse string response as JSON
+                            try:
+                                parsed_response = json.loads(response)
+                                if isinstance(parsed_response, list):
+                                    datasets = parsed_response
+                                elif isinstance(parsed_response, dict) and 'datasets' in parsed_response:
+                                    datasets = parsed_response['datasets']
+                                else:
+                                    print(f"Unexpected parsed response format for {article_id}: {type(parsed_response)}")
+                            except json.JSONDecodeError:
+                                print(f"Failed to parse string response as JSON for {article_id}: {response[:100]}...")
+                        else:
+                            print(f"Unexpected response format for {article_id}: {type(response)}")
+                            print(f"Response content: {str(response)[:200]}...")
+                        
+                        print(f"Generated structured response for {article_id}: {len(datasets)} datasets")
+                        structured_success = True
+                        break
+                        
+                    except Exception as gen_error:
+                        print(f"Structured generation attempt {attempt + 1} failed for {article_id}: {gen_error}")
+                        print(f"Error type: {type(gen_error).__name__}")
+                        if attempt == 2:  # Last attempt
+                            print(f"All structured generation attempts failed for {article_id}")
+                        continue
+            else:
+                print(f"Skipping structured generation for {article_id} (Outlines not available)")
+            
+            # If structured generation failed or returned no datasets, try free-form generation
+            if not structured_success or len(datasets) == 0:
+                try:
+                    print(f"Attempting free-form generation for {article_id}")
+                    
+                    # Tokenize input with truncation to avoid context length issues
+                    inputs = tokenizer(
+                        prompt, 
+                        return_tensors="pt", 
+                        truncation=True, 
+                        padding=True
+                    )
+                    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+                    
+                    # Generate with more conservative parameters
+                    with torch.no_grad():
+                        outputs = model.generate(
+                            **inputs,
+                            temperature=0.1,
+                            do_sample=True,
+                            top_p=0.9,
+                            pad_token_id=tokenizer.eos_token_id,
+                            eos_token_id=tokenizer.eos_token_id,
+                            repetition_penalty=1.1,
+                            early_stopping=True
+                        )
+                    
+                    # Decode response
+                    generated_text = tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
+                    print(f"Free-form generation for {article_id}: {generated_text[:200]}...")
+                    
+                    # Store raw response text for free-form generation
+                    raw_response_text = generated_text
+                    
+                    # Use the new parsing function
+                    freeform_datasets = parse_model_response(generated_text)
+                    # Only use freeform results if structured generation failed completely
+                    if not structured_success:
+                        datasets = freeform_datasets
+                        
+                except Exception as fallback_error:
+                    print(f"Free-form generation also failed for {article_id}: {fallback_error}")
+                    if not structured_success:
+                        datasets = []
+            
+            response = Response(datasets=datasets)
+            results.append({
+                'article_id': article_id,
+                'response': response
+            })
+            
+            # Write raw response to file
+            write_response_to_file(article_id, raw_response_text, output_dir)
+            
+            print(f"Processed article {article_id}: found {len(datasets)} datasets")
+            
+        except Exception as e:
+            print(f"Error processing article {article_id}: {e}")
+            # Create empty response for failed articles
+            datasets = []
+            response = Response(datasets=datasets)
+            results.append({
+                'article_id': article_id,
+                'response': response
+            })
+            
+            # Write empty raw response to file even for failed articles
+            write_response_to_file(article_id, "", output_dir)
+    
+    return results
+
+
+def run_inference_simple(dataset_dict, output_dir, model_dir):
+    """
+    Run inference using only free-form generation without Outlines structured generation.
+    This is a fallback method when structured generation fails.
+    
+    Args:
+        dataset_dict: HuggingFace DatasetDict containing train/test splits
+        output_dir (str): Directory containing article text files
+        model_dir (str): Directory containing the trained model
+        
+    Returns:
+        List[Response]: List of Response objects with extracted datasets for each article
+    """
+    model_path = Path(model_dir)
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model directory not found: {model_path}")
+    
+    print(f"Loading trained model from {model_path}")
+    
+    # Load model with error handling
+    try:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            str(model_path),
+            quantization_config=bnb_config,
+            torch_dtype=torch.bfloat16,
+            device_map='auto',
+            low_cpu_mem_usage=True,
+            trust_remote_code=True
+        )
+    except Exception as e:
+        print(f"Error loading model with quantization: {e}")
+        print("Attempting to load model without quantization...")
+        model = AutoModelForCausalLM.from_pretrained(
+            str(model_path),
+            torch_dtype=torch.bfloat16,
+            device_map='auto',
+            low_cpu_mem_usage=True,
+            trust_remote_code=True
+        )
+    
+    tokenizer = AutoTokenizer.from_pretrained(str(model_path))
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
@@ -314,132 +682,77 @@ def run_inference(dataset_dict, output_dir, model_dir):
             # Create prompt
             prompt = prompt_text.replace('{article_text}', article_text)
             
-            # Create prompt without truncation
-            prompt = prompt_text.replace('{article_text}', article_text)
-            
-            # Tokenize with limits appropriate for 16384 token limit
+            # Tokenize input
             inputs = tokenizer(
                 prompt, 
                 return_tensors="pt", 
                 truncation=True, 
-                padding=False  # No padding to avoid issues
+                padding=True
             )
+            inputs = {k: v.to(model.device) for k, v in inputs.items()}
             
-            # Move inputs to GPU device
-            device = next(model.parameters()).device
-            inputs = {k: v.to(device) for k, v in inputs.items()}
-            
-            # Create attention mask manually
-            inputs['attention_mask'] = torch.ones_like(inputs['input_ids'])
-            
-            # Check if input is too long (should not happen due to truncation)
-                # Generate response with very conservative settings
+            # Generate response
             with torch.no_grad():
-                try:
-                    outputs = model.generate(
-                        inputs['input_ids'],
-                        attention_mask=inputs['attention_mask'],
-                        max_new_tokens=512,  # More room for JSON response
-                        do_sample=False,    # Greedy decoding
-                        pad_token_id=tokenizer.eos_token_id,
-                        eos_token_id=tokenizer.eos_token_id,
-                        num_return_sequences=1
-                    )
-                    
-                    # Decode generated text safely
-                    # Check the shape of outputs tensor
-                    if outputs.dim() > 1 and outputs.shape[0] > 0:
-                        # outputs is [batch_size, sequence_length], take first batch
-                        generated_tokens = outputs[0]
-                    else:
-                        # outputs is already 1D or empty
-                        generated_tokens = outputs
-                    
-                    # Get input length to extract only new tokens
-                    input_length = inputs['input_ids'].shape[1]
-                    
-                    # Extract only the newly generated tokens
-                    if generated_tokens.shape[0] > input_length:
-                        new_tokens = generated_tokens[input_length:]
-                        response_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-                    else:
-                        response_text = ""
-                    
-                    # Parse JSON response
-                    datasets = parse_model_response(response_text)
-                    
-                except Exception as gen_error:
-                    print(f"Generation error for {article_id}: {gen_error}")
-                    import traceback
-                    traceback.print_exc()
-                    print(f"Input shape: {inputs['input_ids'].shape}")
-                    print(f"Input length: {inputs['input_ids'].shape[1]}")
-                    datasets = []
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=512,
+                    temperature=0.1,
+                    do_sample=True,
+                    top_p=0.9,
+                    pad_token_id=tokenizer.eos_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                    repetition_penalty=1.1,
+                    early_stopping=True
+                )
             
-            # Create Response object with pydantic validation
+            # Decode response
+            generated_text = tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
+            print(f"Generated text for {article_id}: {generated_text[:200]}...")
+            
+            # Use the new parsing function
+            datasets = parse_model_response(generated_text)
+            
             response = Response(datasets=datasets)
             results.append({
                 'article_id': article_id,
                 'response': response
             })
             
+            # Write raw response to file
+            write_response_to_file(article_id, generated_text, output_dir)
+            
             print(f"Processed article {article_id}: found {len(datasets)} datasets")
             
         except Exception as e:
             print(f"Error processing article {article_id}: {e}")
-            # Create empty response for failed articles
-            response = Response(datasets=[])
+            datasets = []
+            response = Response(datasets=datasets)
             results.append({
                 'article_id': article_id,
                 'response': response
             })
+            
+            # Write empty raw response to file even for failed articles
+            write_response_to_file(article_id, "", output_dir)
     
     return results
 
 
-def parse_model_response(response_text):
+def write_response_to_file(article_id, raw_response_text, output_dir):
     """
-    Parse the model's JSON response and extract datasets.
-    Handles Deepseek R1's <think> tags by extracting only the JSON portion.
+    Write the raw model response to a file in the specified output directory.
     
     Args:
-        response_text (str): Generated response from the model
-        
-    Returns:
-        List[Dataset]: List of Dataset objects
+        article_id (str): The article identifier
+        raw_response_text (str): The raw response text from the model
+        output_dir (str): Directory to write response files
     """
-    try:
-        # Remove <think> tags and their content first
-        clean_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL)
-        
-        # Also handle unclosed think tags
-        clean_text = re.sub(r'<think>.*$', '', clean_text, flags=re.DOTALL)
-        
-        # Try to find JSON array in the cleaned response
-        json_match = re.search(r'\[.*?\]', clean_text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-            datasets_data = json.loads(json_str)
-            
-            # Convert to Dataset objects
-            datasets = []
-            for item in datasets_data:
-                if isinstance(item, dict) and 'dataset_name' in item and 'dataset_type' in item:
-                    dataset = Dataset(
-                        dataset_name=item['dataset_name'],
-                        dataset_type=item['dataset_type']
-                    )
-                    datasets.append(dataset)
-            
-            return datasets
-        else:
-            print(f"No valid JSON found in response after cleaning: {clean_text[:200]}...")
-            return []
-            
-    except json.JSONDecodeError as e:
-        print(f"JSON decode error: {e}")
-        print(f"Cleaned response text: {clean_text[:200] if 'clean_text' in locals() else response_text[:200]}...")
-        return []
-    except Exception as e:
-        print(f"Error parsing response: {e}")
-        return []
+    response_file = Path(output_dir) / f"{article_id}.response"
+    
+    # Write raw response to file
+    with open(response_file, 'w', encoding='utf-8') as f:
+        f.write(raw_response_text)
+    
+    print(f"Raw response written to {response_file}")
+
+

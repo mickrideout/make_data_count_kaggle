@@ -32,7 +32,7 @@ if __name__ == "__main__":
 
         # Causal model training
         causal_model_dir = f"{output_directory}/causal_model"
-        train_causal_model(dataset_dict, output_directory, causal_model_dir)
+        #train_causal_model(dataset_dict, output_directory, causal_model_dir)
 
         # Causal model inference
         inference_results = run_inference(dataset_dict, output_directory, causal_model_dir)

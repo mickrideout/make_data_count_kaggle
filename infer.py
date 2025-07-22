@@ -2,13 +2,13 @@ import os
 import sys
 import pandas as pd
 
-from make_data_count_kaggle.causal_model import run_inference
+from make_data_count_kaggle.causal_model import run_inference, run_inference_simple
 from make_data_count_kaggle.data_preprocessing import convert_labels_csv_to_json, convert_pdfs_to_text, convert_xmls_to_text, create_huggingface_dataset, decompose_text_to_paragraphs, decompose_train_labels
 from make_data_count_kaggle.dataset_matching import basic_matching, create_empty_candidate_dataset
 from make_data_count_kaggle.dataset_classification import dummy_classifier
 
 
-def main(input_directory, output_directory):
+def main(input_directory, output_directory, model_dir):
     # Dataset preprocessing
     decompose_train_labels(input_directory, output_directory)
     convert_labels_csv_to_json(output_directory)
@@ -20,8 +20,14 @@ def main(input_directory, output_directory):
     # Causal model training
     SUBMISSION_FILE = "submission.csv"
 
-    # Causal model inference
-    inference_results = run_inference(dataset_dict, output_directory, model_dir)
+    # Causal model inference with fallback
+    try:
+        print("Attempting inference with structured generation...")
+        inference_results = run_inference(dataset_dict, output_directory, model_dir)
+    except Exception as e:
+        print(f"Structured inference failed: {e}")
+        print("Falling back to simple inference...")
+        inference_results = run_inference_simple(dataset_dict, output_directory, model_dir)
     
     # Convert inference results to output dataframe for evaluation
     output_data = []
