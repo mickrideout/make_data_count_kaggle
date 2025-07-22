@@ -3,8 +3,6 @@ import sys
 import pandas as pd
 import mlflow
 
-from make_data_count_kaggle.dataset_classification import dummy_classifier
-from make_data_count_kaggle.dataset_matching import basic_matching, create_empty_candidate_dataset
 from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_paragraphs, decompose_train_labels, convert_labels_csv_to_json, create_huggingface_dataset
 from make_data_count_kaggle.evaluation import calculate_f1_score
 from make_data_count_kaggle.causal_model import train_causal_model, run_inference
@@ -32,7 +30,7 @@ if __name__ == "__main__":
 
         # Causal model training
         causal_model_dir = f"{output_directory}/causal_model"
-        #train_causal_model(dataset_dict, output_directory, causal_model_dir)
+        train_causal_model(dataset_dict, output_directory, causal_model_dir)
 
         # Causal model inference
         inference_results = run_inference(dataset_dict, output_directory, causal_model_dir)

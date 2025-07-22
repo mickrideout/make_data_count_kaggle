@@ -2,7 +2,7 @@
 
 import os
 # Set environment variables for better memory management
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 import argparse

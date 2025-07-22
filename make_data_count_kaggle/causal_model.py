@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field
 from typing import List
 import re
 
-model_name = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+model_name = "prithivMLmods/Galactic-Qwen-14B-Exp2"
+MAX_NEW_TOKENS = 4000
 
 # Try to import Outlines, but handle gracefully if not available
 try:
@@ -218,18 +219,40 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
     
     print(f"Created training dataset with {len(training_dataset)} examples")
     
-    # Define formatting function that creates prompts on-the-fly
+    # Define formatting function that creates prompts on-the-fly using chat template
     def formatting_func(example):
         try:
             # Load article text on-the-fly
             article_text = load_article_text(example['article_id'], output_dir)
             # Create prompt by substituting article text
-            prompt = prompt_text.replace('{article_text}', article_text)
-            # Combine prompt and completion
-            return f"{prompt}{example['completion']}"
+            user_prompt = prompt_text.replace('{article_text}', article_text)
+            
+            # Format as chat messages
+            messages = [
+                {"role": "system", "content": "You are an expert in extracting and categorizing dataset mentions from research papers and policy documents."},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": example['completion']}
+            ]
+            
+            # Apply chat template
+            return tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False
+            )
         except FileNotFoundError:
             # Fallback if article text is missing
-            return f"{prompt_text.replace('{article_text}', '[Article text not found]')}{example['completion']}"
+            fallback_prompt = prompt_text.replace('{article_text}', '[Article text not found]')
+            messages = [
+                {"role": "system", "content": "You are an expert in extracting and categorizing dataset mentions from research papers and policy documents."},
+                {"role": "user", "content": fallback_prompt},
+                {"role": "assistant", "content": example['completion']}
+            ]
+            return tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False
+            )
     
     # Training arguments optimized for LoRA + quantization
     training_args = TrainingArguments(
@@ -296,10 +319,20 @@ def test_outlines_integration(model, tokenizer):
         outlines_model = models.from_transformers(model, tokenizer)
         json_generator = Generator(outlines_model, Response)
         
-        # Simple test prompt
-        test_prompt = prompt_text.replace('{article_text}', "This paper uses LSMS-ISA data for analysis.")
+        # Simple test prompt using chat template
+        user_prompt = prompt_text.replace('{article_text}', "This paper uses LSMS-ISA data for analysis.")
+        messages = [
+            {"role": "system", "content": "You are an expert in extracting and categorizing dataset mentions from research papers and policy documents."},
+            {"role": "user", "content": user_prompt}
+        ]
         
-        response = json_generator(test_prompt)
+        test_prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        
+        response = json_generator(test_prompt, max_new_tokens=MAX_NEW_TOKENS, temperature=0.1, top_p=0.9, repetition_penalty=1.1)
         print(f"Test response type: {type(response)}")
         print(f"Test response: {response}")
         
@@ -386,18 +419,32 @@ def debug_outlines_response(model, tokenizer, test_text):
         json_generator = Generator(outlines_model, Response)
         print("✓ JSON generator created")
         
-        # Create test prompt
-        test_prompt = prompt_text.replace('{article_text}', test_text)
+        # Create test prompt using chat template
+        user_prompt = prompt_text.replace('{article_text}', test_text)
+        messages = [
+            {"role": "system", "content": "You are an expert in extracting and categorizing dataset mentions from research papers and policy documents."},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        test_prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
         print(f"Test prompt length: {len(test_prompt)} characters")
         
         print("Generating response...")
-        response = json_generator(test_prompt)
+        response = json_generator(test_prompt, max_new_tokens=MAX_NEW_TOKENS, temperature=0.1, top_p=0.9, repetition_penalty=1.1)
         
         debug_info["response_type"] = type(response).__name__
-        debug_info["response_str"] = str(response)[:500]
+        response_str = str(response)
+        debug_info["response_str"] = response_str[:500]
+        debug_info["response_length"] = len(response_str)
         
+        response_str = str(response)
         print(f"Response type: {type(response)}")
-        print(f"Response: {str(response)[:200]}...")
+        print(f"Response length: {len(response_str)} characters")
+        print(f"Response preview: {response_str[:200]}{'...' if len(response_str) > 200 else ''}")
         
         # Try different parsing approaches
         if isinstance(response, str):
@@ -434,6 +481,11 @@ def run_inference(dataset_dict, output_dir, model_dir):
     if not model_path.exists():
         raise FileNotFoundError(f"Model directory not found: {model_path}")
     
+    # Clear GPU cache at start
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print(f"GPU memory cleared. Available memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+    
     # Load trained model and tokenizer with same quantization as training
     print(f"Loading trained model from {model_path}")
     
@@ -459,7 +511,8 @@ def run_inference(dataset_dict, output_dir, model_dir):
             torch_dtype=torch.bfloat16,
             device_map='auto',  # Enable automatic device mapping
             low_cpu_mem_usage=True,
-            trust_remote_code=True
+            trust_remote_code=True,
+            local_files_only=True
         )
     except Exception as e:
         print(f"Error loading model with quantization: {e}")
@@ -469,8 +522,16 @@ def run_inference(dataset_dict, output_dir, model_dir):
             torch_dtype=torch.bfloat16,
             device_map='auto',
             low_cpu_mem_usage=True,
-            trust_remote_code=True
+            trust_remote_code=True,
+            local_files_only=True
         )
+    
+    # Optimize model for inference
+    model.eval()  # Set to evaluation mode
+    
+    # Clear any existing gradients
+    for param in model.parameters():
+        param.grad = None
     
     # Test Outlines integration first
     outlines_working = test_outlines_integration(model, tokenizer)
@@ -484,11 +545,42 @@ def run_inference(dataset_dict, output_dir, model_dir):
     
     for article_id in test_article_ids:
         try:
+            # Check memory before processing each article
+            if torch.cuda.is_available():
+                memory_info = torch.cuda.mem_get_info()
+                available_memory = memory_info[0] / 1024**3
+                used_memory = (memory_info[1] - memory_info[0]) / 1024**3
+                print(f"Processing {article_id}: Memory usage: {used_memory:.2f} GB used, {available_memory:.2f} GB available")
+                
+                # If less than 2GB available, force garbage collection
+                if available_memory < 2.0:
+                    print(f"Low memory detected ({available_memory:.2f} GB), clearing cache")
+                    torch.cuda.empty_cache()
+                    import gc
+                    gc.collect()
+            
             # Load article text
             article_text = load_article_text(article_id, output_dir)
             
-            # Create prompt
-            prompt = prompt_text.replace('{article_text}', article_text)
+            # Truncate article text if too long to prevent memory issues
+            max_article_length = 50000  # Limit article to ~50k characters
+            if len(article_text) > max_article_length:
+                print(f"Truncating article {article_id} from {len(article_text)} to {max_article_length} characters")
+                article_text = article_text[:max_article_length] + "\n[... text truncated ...]"
+            
+            # Create chat prompt using template
+            user_prompt = prompt_text.replace('{article_text}', article_text)
+            messages = [
+                {"role": "system", "content": "You are an expert in extracting and categorizing dataset mentions from research papers and policy documents."},
+                {"role": "user", "content": user_prompt}
+            ]
+            
+            # Apply chat template for inference
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
             
             # Try structured generation first with retry logic (only if Outlines is available)
             datasets = []
@@ -498,17 +590,39 @@ def run_inference(dataset_dict, output_dir, model_dir):
             if OUTLINES_AVAILABLE:
                 for attempt in range(1):  # Try up to 3 times
                     try:
+                        # Check memory before creating Outlines objects
+                        if torch.cuda.is_available():
+                            memory_info = torch.cuda.mem_get_info()
+                            available_memory = memory_info[0] / 1024**3
+                            total_memory = memory_info[1] / 1024**3
+                            print(f"Memory before Outlines creation: {available_memory:.2f}/{total_memory:.2f} GB")
+                            
+                            if available_memory < 3.0:  # Less than 3GB available
+                                print(f"Insufficient memory ({available_memory:.2f} GB), skipping structured generation")
+                                break
+                        
                         # Create fresh Outlines model and generator for each attempt
                         outlines_model = models.from_transformers(model, tokenizer)
                         json_generator = Generator(outlines_model, Response)
                         
                         print(f"Attempting structured generation for {article_id} (attempt {attempt + 1})")
-                        response = json_generator(prompt)
+                        
+                        # Check available memory before generation
+                        if torch.cuda.is_available():
+                            available_memory = torch.cuda.mem_get_info()[0] / 1024**3
+                            if available_memory < 2.0:  # Less than 2GB available
+                                print(f"Low GPU memory ({available_memory:.2f} GB), clearing cache")
+                                torch.cuda.empty_cache()
+                        
+                        response = json_generator(prompt, max_new_tokens=MAX_NEW_TOKENS, temperature=0.1, top_p=0.9, repetition_penalty=1.1)
+                        response_str = str(response)
                         print(f"Raw response type: {type(response)}")
-                        print(f"Raw response: {str(response)[:200]}...")
+                        print(f"Raw response length: {len(response_str)} characters")
+                        print(f"Raw response preview: {response_str[:200]}{'...' if len(response_str) > 200 else ''}")
                         
                         # Store raw response text
                         raw_response_text = str(response)
+                        print(f"Stored raw response length: {len(raw_response_text)} characters")
                         
                         # Handle different response types
                         datasets = []
@@ -529,18 +643,31 @@ def run_inference(dataset_dict, output_dir, model_dir):
                                 else:
                                     print(f"Unexpected parsed response format for {article_id}: {type(parsed_response)}")
                             except json.JSONDecodeError:
-                                print(f"Failed to parse string response as JSON for {article_id}: {response[:100]}...")
+                                print(f"Failed to parse string response as JSON for {article_id}: {len(response)} characters")
+                                print(f"Response preview: {str(response)[:100]}{'...' if len(str(response)) > 100 else ''}")
                         else:
                             print(f"Unexpected response format for {article_id}: {type(response)}")
-                            print(f"Response content: {str(response)[:200]}...")
+                            response_content = str(response)
+                            print(f"Response content length: {len(response_content)} characters")
+                            print(f"Response content preview: {response_content[:200]}{'...' if len(response_content) > 200 else ''}")
                         
                         print(f"Generated structured response for {article_id}: {len(datasets)} datasets")
                         structured_success = True
+                        
+                        # Clear any intermediate caches after successful generation
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        
                         break
                         
                     except Exception as gen_error:
                         print(f"Structured generation attempt {attempt + 1} failed for {article_id}: {gen_error}")
                         print(f"Error type: {type(gen_error).__name__}")
+                        
+                        # Clear GPU cache on error to prevent memory accumulation
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        
                         if attempt == 2:  # Last attempt
                             print(f"All structured generation attempts failed for {article_id}")
                         continue
@@ -552,16 +679,17 @@ def run_inference(dataset_dict, output_dir, model_dir):
                 try:
                     print(f"Attempting free-form generation for {article_id}")
                     
-                    # Tokenize input with truncation to avoid context length issues
+                    # Tokenize input with aggressive truncation to avoid context length issues
                     inputs = tokenizer(
                         prompt, 
                         return_tensors="pt", 
                         truncation=True, 
+                        max_length=8192,  # Limit context to reduce memory usage
                         padding=True
                     )
                     inputs = {k: v.to(model.device) for k, v in inputs.items()}
                     
-                    # Generate with more conservative parameters
+                    # Generate with more conservative parameters to reduce memory usage
                     with torch.no_grad():
                         outputs = model.generate(
                             **inputs,
@@ -571,12 +699,13 @@ def run_inference(dataset_dict, output_dir, model_dir):
                             pad_token_id=tokenizer.eos_token_id,
                             eos_token_id=tokenizer.eos_token_id,
                             repetition_penalty=1.1,
-                            early_stopping=True
+                            use_cache=False  # Disable KV cache to save memory
                         )
                     
                     # Decode response
                     generated_text = tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
-                    print(f"Free-form generation for {article_id}: {generated_text[:200]}...")
+                    print(f"Free-form generation for {article_id}: {len(generated_text)} characters")
+                    print(f"Free-form response preview: {generated_text[:200]}{'...' if len(generated_text) > 200 else ''}")
                     
                     # Store raw response text for free-form generation
                     raw_response_text = generated_text
@@ -586,9 +715,13 @@ def run_inference(dataset_dict, output_dir, model_dir):
                     # Only use freeform results if structured generation failed completely
                     if not structured_success:
                         datasets = freeform_datasets
+                        print(f"Using free-form results: {len(datasets)} datasets found")
                         
                 except Exception as fallback_error:
                     print(f"Free-form generation also failed for {article_id}: {fallback_error}")
+                    # Clear GPU cache on fallback error
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
                     if not structured_success:
                         datasets = []
             
@@ -602,9 +735,32 @@ def run_inference(dataset_dict, output_dir, model_dir):
             write_response_to_file(article_id, raw_response_text, output_dir)
             
             print(f"Processed article {article_id}: found {len(datasets)} datasets")
+            if len(datasets) > 0:
+                dataset_names = []
+                for d in datasets[:3]:  # Show first 3 datasets
+                    if hasattr(d, 'dataset_name'):
+                        dataset_names.append(d.dataset_name)
+                    elif isinstance(d, dict) and 'dataset_name' in d:
+                        dataset_names.append(d['dataset_name'])
+                    else:
+                        dataset_names.append(str(d))
+                print(f"Sample datasets: {dataset_names}{'...' if len(datasets) > 3 else ''}")
+            
+            # Clear any accumulated gradients and GPU cache after each article
+            for param in model.parameters():
+                param.grad = None
+            
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                available_memory = torch.cuda.mem_get_info()[0] / 1024**3
+                print(f"GPU memory cleared after {article_id}. Available: {available_memory:.2f} GB")
             
         except Exception as e:
             print(f"Error processing article {article_id}: {e}")
+            # Clear GPU cache even on error
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
             # Create empty response for failed articles
             datasets = []
             response = Response(datasets=datasets)
@@ -635,6 +791,11 @@ def run_inference_simple(dataset_dict, output_dir, model_dir):
     model_path = Path(model_dir)
     if not model_path.exists():
         raise FileNotFoundError(f"Model directory not found: {model_path}")
+    
+    # Clear GPU cache at start
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print(f"GPU memory cleared. Available memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
     
     print(f"Loading trained model from {model_path}")
     
@@ -679,8 +840,19 @@ def run_inference_simple(dataset_dict, output_dir, model_dir):
             # Load article text
             article_text = load_article_text(article_id, output_dir)
             
-            # Create prompt
-            prompt = prompt_text.replace('{article_text}', article_text)
+            # Create chat prompt using template
+            user_prompt = prompt_text.replace('{article_text}', article_text)
+            messages = [
+                {"role": "system", "content": "You are an expert in extracting and categorizing dataset mentions from research papers and policy documents."},
+                {"role": "user", "content": user_prompt}
+            ]
+            
+            # Apply chat template for inference
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
             
             # Tokenize input
             inputs = tokenizer(
@@ -695,19 +867,18 @@ def run_inference_simple(dataset_dict, output_dir, model_dir):
             with torch.no_grad():
                 outputs = model.generate(
                     **inputs,
-                    max_new_tokens=512,
                     temperature=0.1,
                     do_sample=True,
                     top_p=0.9,
                     pad_token_id=tokenizer.eos_token_id,
                     eos_token_id=tokenizer.eos_token_id,
                     repetition_penalty=1.1,
-                    early_stopping=True
                 )
             
             # Decode response
             generated_text = tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
-            print(f"Generated text for {article_id}: {generated_text[:200]}...")
+            print(f"Generated text for {article_id}: {len(generated_text)} characters")
+            print(f"Response preview: {generated_text[:200]}{'...' if len(generated_text) > 200 else ''}")
             
             # Use the new parsing function
             datasets = parse_model_response(generated_text)
@@ -722,6 +893,16 @@ def run_inference_simple(dataset_dict, output_dir, model_dir):
             write_response_to_file(article_id, generated_text, output_dir)
             
             print(f"Processed article {article_id}: found {len(datasets)} datasets")
+            if len(datasets) > 0:
+                dataset_names = []
+                for d in datasets[:3]:  # Show first 3 datasets
+                    if hasattr(d, 'dataset_name'):
+                        dataset_names.append(d.dataset_name)
+                    elif isinstance(d, dict) and 'dataset_name' in d:
+                        dataset_names.append(d['dataset_name'])
+                    else:
+                        dataset_names.append(str(d))
+                print(f"Sample datasets: {dataset_names}{'...' if len(datasets) > 3 else ''}")
             
         except Exception as e:
             print(f"Error processing article {article_id}: {e}")
@@ -753,6 +934,6 @@ def write_response_to_file(article_id, raw_response_text, output_dir):
     with open(response_file, 'w', encoding='utf-8') as f:
         f.write(raw_response_text)
     
-    print(f"Raw response written to {response_file}")
+    print(f"Raw response written to {response_file} ({len(raw_response_text)} characters)")
 
 
