@@ -5,21 +5,22 @@ import mlflow
 
 from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_paragraphs, decompose_train_labels, convert_labels_csv_to_json, create_huggingface_dataset
 from make_data_count_kaggle.evaluation import calculate_f1_score
-from make_data_count_kaggle.causal_model import train_causal_model, run_inference, MODEL_NAME
+from make_data_count_kaggle.causal_model import train_causal_model, run_inference
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python train.py <input_dir> <output_dir>")
+    if len(sys.argv) != 4:
+        print("Usage: python train.py <input_dir> <output_dir> <model_dir>")
         sys.exit(1)
     
     input_directory = sys.argv[1]
     output_directory = sys.argv[2]
+    model_dir = sys.argv[3]
     
     with mlflow.start_run():
         mlflow.log_param("input_directory", input_directory)
         mlflow.log_param("output_directory", output_directory)
-
+        mlflow.log_param("model_dir", model_dir)
         # Dataset preprocessing
         decompose_train_labels(input_directory, output_directory)
         convert_labels_csv_to_json(output_directory)
@@ -29,11 +30,10 @@ if __name__ == "__main__":
         dataset_dict = create_huggingface_dataset(output_directory)
 
         # Causal model training
-        causal_model_dir = f"{output_directory}/causal_model"
-        train_causal_model(dataset_dict, output_directory, causal_model_dir)
+        train_causal_model(dataset_dict, output_directory, model_dir)
 
         # Causal model inference
-        inference_results = run_inference(dataset_dict, output_directory, causal_model_dir)
+        inference_results = run_inference(dataset_dict, output_directory, model_dir)
         
         # Convert inference results to output dataframe for evaluation
         output_data = []
@@ -74,7 +74,6 @@ if __name__ == "__main__":
         mlflow.log_metric("true_positives", tp)
         mlflow.log_metric("false_positives", fp)
         mlflow.log_metric("false_negatives", fn)
-        mlflow.log_param("model_name", MODEL_NAME)
 
 
 

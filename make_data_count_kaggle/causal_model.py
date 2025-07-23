@@ -10,10 +10,6 @@ from pydantic import BaseModel, Field
 from typing import List
 import re
 
-#model_name = "Yuma42/Llama3.1-SuperHawk-8B"
-#MODEL_NAME = "ibm-granite/granite-3.2-8b-instruct"
-#MODEL_NAME = "microsoft/Phi-4-mini-instruct"
-MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"
 MAX_NEW_TOKENS = 4000
 
 # Try to import Outlines, but handle gracefully if not available
@@ -165,22 +161,20 @@ def create_training_dataset(dataset_dict, output_dir):
     return HFDataset.from_list(training_data)
 
 
-def train_causal_model(dataset_dict, output_dir, model_output_dir):
+def train_causal_model(dataset_dict, output_dir, model_dir):
     """
-    Train a causal language model using microsoft/Phi-4-mini-instruct.
+    Train a causal language model
     
     Args:
         dataset_dict: HuggingFace DatasetDict containing train/test splits
         output_dir (str): Directory containing article text files and prompt template
-        model_output_dir (str): Directory to save the trained model
+        model_dir (str): Directory to save the trained model
     """
-    # Create model output directory
-    model_output_path = Path(model_output_dir)
-    model_output_path.mkdir(parents=True, exist_ok=True)
+
     
     # Load model and tokenizer with larger context window
   # Large context window, instruct tuned
-    print(f"Loading model and tokenizer: {MODEL_NAME}")
+    print(f"Loading model and tokenizer: {model_dir}")
     
     # Use 4-bit quantization to reduce memory usage
     bnb_config = BitsAndBytesConfig(
@@ -190,12 +184,13 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
         bnb_4bit_use_double_quant=True,
     )
     
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True,local_files_only=True)
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
+        model_dir,
         quantization_config=bnb_config,
         device_map='auto',  # Auto device mapping
-        trust_remote_code=True
+        trust_remote_code=True,
+        local_files_only=True
     )
     
     # Add LoRA adapters for memory-efficient fine-tuning
@@ -259,7 +254,7 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
     
     # Training arguments optimized for LoRA + quantization
     training_args = TrainingArguments(
-        output_dir=str(model_output_path),
+        output_dir=str(model_dir),
         overwrite_output_dir=True,
         num_train_epochs=3,  # More epochs since LoRA needs more training
         per_device_train_batch_size=2,  # Can increase with quantization
@@ -292,14 +287,9 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
     print("Starting model training...")
     trainer.train()
     
-    # Save final model - merge LoRA adapters with base model for Kaggle offline compatibility
-    print(f"Saving trained model to {model_output_path}")
-    if model_output_path.exists():
-        import shutil
-        shutil.rmtree(model_output_path)
     
     # First save the LoRA adapters
-    adapter_path = model_output_path / "adapters"
+    adapter_path = f"{model_dir}/adapters"
     adapter_path.mkdir(parents=True, exist_ok=True)
     trainer.save_model(str(adapter_path))
     
@@ -308,23 +298,23 @@ def train_causal_model(dataset_dict, output_dir, model_output_dir):
     try:
         merged_model = model.merge_and_unload()
         # Save the merged model
-        merged_model.save_pretrained(str(model_output_path), safe_serialization=True)
-        tokenizer.save_pretrained(str(model_output_path))
+        merged_model.save_pretrained(str(model_dir), safe_serialization=True)
+        tokenizer.save_pretrained(str(model_dir))
         print("Successfully saved merged model for offline use")
     except Exception as e:
         print(f"Warning: Failed to merge model ({e}). Saving adapters only.")
         # Fallback: save adapters and base model config
-        trainer.save_model(str(model_output_path))
-        tokenizer.save_pretrained(str(model_output_path))
+        trainer.save_model(str(model_dir))
+        tokenizer.save_pretrained(str(model_dir))
         
         # Save base model name for reference
-        config_file = model_output_path / "base_model.txt"
+        config_file = f"{model_dir}/base_model.txt"
         with open(config_file, 'w') as f:
-            f.write(MODEL_NAME)
+            f.write(model_dir)
     
     print("Model training completed successfully!")
     
-    return str(model_output_path)
+    return str(model_dir)
 
 
 def test_outlines_integration(model, tokenizer):
@@ -525,7 +515,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
         bnb_4bit_use_double_quant=True,
     )
     
-    tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, trust_remote_code=True)
     
     # Ensure tokenizer has proper configuration
     if tokenizer.pad_token is None:
@@ -559,11 +549,12 @@ def run_inference(dataset_dict, output_dir, model_dir):
                     quantization_config=bnb_config,
                     torch_dtype=torch.bfloat16,
                     device_map='auto',
-                    trust_remote_code=True
+                    trust_remote_code=True,
+                    local_files_only=True
                 )
                 # Load adapters
                 from peft import PeftModel
-                model = PeftModel.from_pretrained(model, model_dir)
+                model = PeftModel.from_pretrained(model, model_dir,local_files_only=True, trust_remote_code=True)
                 print("Successfully loaded base model + adapters")
             except Exception as adapter_error:
                 print(f"Failed to load base model + adapters: {adapter_error}")
@@ -885,7 +876,7 @@ def run_inference_simple(dataset_dict, output_dir, model_dir):
             local_files_only=True
         )
     
-    tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     

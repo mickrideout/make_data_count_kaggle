@@ -9,16 +9,21 @@ import argparse
 import sys
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
+from huggingface_hub import snapshot_download
 
 #deepseek-ai/DeepSeek-R1-0528-Qwen3-8B
 #microsoft/Phi-4-mini-instruct
 #microsoft/Phi-4-reasoning
 #prithivMLmods/Galactic-Qwen-14B-Exp2
 #ibm-granite/granite-3.2-8b-instruct
-def load_model(model_name):
+def load_model(model_name, model_dir):
     """Load the Hugging Face model and tokenizer with memory optimization."""
+
+    if not os.path.exists(model_dir):
+        snapshot_download(model_name, local_dir=model_dir)
+
     print(f"Loading model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, trust_remote_code=True)
 
     
     # Check if CUDA is available and has sufficient memory
@@ -26,27 +31,33 @@ def load_model(model_name):
         try:
             # Load model with memory optimization
             model = AutoModelForCausalLM.from_pretrained(
-                model_name,
+                model_dir,
                 torch_dtype=torch.float16,  # Use half precision to save memory
                 device_map="auto",  # Automatically handle device placement
                 low_cpu_mem_usage=True,  # Reduce CPU memory usage during loading
+                trust_remote_code=True,
+                local_files_only=True
             )
             print("Model loaded on GPU with memory optimization")
         except torch.cuda.OutOfMemoryError:
             print("GPU memory insufficient, falling back to CPU")
             model = AutoModelForCausalLM.from_pretrained(
-                model_name,
+                model_dir,
                 torch_dtype=torch.float16,
                 low_cpu_mem_usage=True,
                 device_map="cpu",
+                trust_remote_code=True,
+                local_files_only=True
             )
     else:
         print("CUDA not available, using CPU")
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            model_dir,
             torch_dtype=torch.float16,
             low_cpu_mem_usage=True,
             device_map="cpu",
+            trust_remote_code=True,
+            local_files_only=True
         )
     
     # Add padding token if it doesn't exist
@@ -126,6 +137,7 @@ def main():
     parser = argparse.ArgumentParser(description='Run Hugging Face model inference with article text')
     parser.add_argument('article_file', help='Path to file containing article text')
     parser.add_argument('--model', help='Hugging Face model to use')
+    parser.add_argument('--model-dir', help='Model directory to use')
     
     args = parser.parse_args()
     
@@ -208,7 +220,7 @@ Each extracted dataset should have the following fields:
     prompt = prompt_template.replace('{article_text}', article_text)
     
     print("Loading model...")
-    model, tokenizer = load_model(args.model)
+    model, tokenizer = load_model(args.model, args.model_dir)
     
     print("Running inference...")
     response = run_inference(model, tokenizer, prompt)
