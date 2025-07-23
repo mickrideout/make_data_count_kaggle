@@ -290,7 +290,7 @@ def train_causal_model(dataset_dict, output_dir, model_dir):
     
     
     # First save the LoRA adapters
-    adapter_path = f"{model_dir}/adapters"
+    adapter_path = Path(f"{model_dir}/adapters")
     adapter_path.mkdir(parents=True, exist_ok=True)
     trainer.save_model(str(adapter_path))
     
