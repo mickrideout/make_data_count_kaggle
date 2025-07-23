@@ -20,7 +20,7 @@ def load_model(model_name, model_dir):
     """Load the Hugging Face model and tokenizer with memory optimization."""
 
     if not os.path.exists(model_dir):
-        snapshot_download(model_name, local_dir=model_dir)
+        snapshot_download(model_name, local_dir=model_dir, local_dir_use_symlinks=False)
 
     print(f"Loading model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, trust_remote_code=True)
