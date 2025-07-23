@@ -176,7 +176,15 @@ def train_causal_model(dataset_dict, output_dir, model_dir):
         output_dir (str): Directory containing article text files and prompt template
         model_dir (str): Directory to save the trained model
     """
-
+    # Set PyTorch memory allocation to avoid fragmentation
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    
+    # Clear GPU cache at start
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        available_memory = torch.cuda.mem_get_info()[0] / 1024**3
+        print(f"GPU memory cleared at start. Total: {total_memory:.2f} GB, Available: {available_memory:.2f} GB")
     
     # Load model and tokenizer with larger context window
   # Large context window, instruct tuned
@@ -199,11 +207,11 @@ def train_causal_model(dataset_dict, output_dir, model_dir):
         local_files_only=True
     )
     
-    # Add LoRA adapters for memory-efficient fine-tuning
+    # Add LoRA adapters for memory-efficient fine-tuning (reduced rank for 14B model)
     peft_config = LoraConfig(
         lora_alpha=16,
         lora_dropout=0.1,
-        r=64,
+        r=32,  # Reduced from 64 to 32 for better memory efficiency
         bias="none",
         task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
@@ -258,14 +266,14 @@ def train_causal_model(dataset_dict, output_dir, model_dir):
                 add_generation_prompt=False
             )
     
-    # Training arguments optimized for LoRA + quantization
+    # Training arguments optimized for LoRA + quantization (14B model on 24GB GPU)
     training_args = TrainingArguments(
         output_dir=str(model_dir),
         overwrite_output_dir=True,
         num_train_epochs=3,  # More epochs since LoRA needs more training
-        per_device_train_batch_size=2,  # Can increase with quantization
-        per_device_eval_batch_size=2,
-        gradient_accumulation_steps=4,  # Effective batch size = 2*4 = 8
+        per_device_train_batch_size=1,  # Reduced from 2 to 1 for 14B model
+        per_device_eval_batch_size=1,
+        gradient_accumulation_steps=8,  # Increased to maintain effective batch size = 1*8 = 8
         warmup_steps=20,
         logging_steps=5,
         save_steps=100,
@@ -279,14 +287,16 @@ def train_causal_model(dataset_dict, output_dir, model_dir):
         dataloader_num_workers=0,  # Disable multiprocessing
         optim="paged_adamw_32bit",  # Memory-efficient optimizer
         learning_rate=2e-4,  # Higher learning rate for LoRA
+        max_steps=-1,  # Use epochs instead of steps
+        ddp_find_unused_parameters=False,  # Optimization for DDP
     )
     
-    # Create SFTTrainer with basic parameters
+    # Create SFTTrainer with memory-optimized parameters
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=training_dataset,
-        formatting_func=formatting_func,
+        formatting_func=formatting_func
     )
     
     # Train model
