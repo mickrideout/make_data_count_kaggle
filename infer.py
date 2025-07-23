@@ -15,6 +15,10 @@ from make_data_count_kaggle.data_preprocessing import convert_labels_csv_to_json
 def main(input_directory, output_directory, model_dir):
     print("Starting inference pipeline with memory optimizations...")
     
+    # Import torch for memory management
+    import torch
+    import gc
+    
     # Dataset preprocessing
     decompose_train_labels(input_directory, output_directory)
     convert_labels_csv_to_json(output_directory)
@@ -24,7 +28,6 @@ def main(input_directory, output_directory, model_dir):
     dataset_dict = create_huggingface_dataset(output_directory)
     
     # Clear any Python garbage before model loading
-    import gc
     gc.collect()
     
     # Additional memory optimization
@@ -50,7 +53,6 @@ def main(input_directory, output_directory, model_dir):
         print(f"Structured inference failed: {e}")
         print("Falling back to simple inference...")
         # Clear memory before fallback
-        import torch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             memory_info = torch.cuda.mem_get_info()
