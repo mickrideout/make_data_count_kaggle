@@ -13,7 +13,7 @@ import re
 #model_name = "Yuma42/Llama3.1-SuperHawk-8B"
 #MODEL_NAME = "ibm-granite/granite-3.2-8b-instruct"
 #MODEL_NAME = "microsoft/Phi-4-mini-instruct"
-MODEL_NAME = "LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct"
+MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"
 MAX_NEW_TOKENS = 4000
 
 # Try to import Outlines, but handle gracefully if not available
