@@ -724,7 +724,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
                 print(f"Skipping structured generation for {article_id} (Outlines not available)")
             
             # If structured generation failed or returned no datasets, try free-form generation
-            if not structured_success or len(datasets) == 0:
+            if not structured_success:
                 try:
                     print(f"Attempting free-form generation for {article_id}")
                     
