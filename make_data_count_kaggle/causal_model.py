@@ -11,6 +11,7 @@ from typing import List
 import re
 
 MAX_NEW_TOKENS = 4000
+MAX_TOKEN_LENGTH = 100000
 MAX_CHARS_PER_ARTICLE = 100000
 
 # Try to import Outlines, but handle gracefully if not available
@@ -20,6 +21,10 @@ try:
 except ImportError:
     print("Warning: Outlines library not available. Structured generation will be disabled.")
     OUTLINES_AVAILABLE = False
+
+# Global cache for Outlines model to prevent recreating it
+_OUTLINES_MODEL_CACHE = {}
+_OUTLINES_GENERATOR_CACHE = {}
 
 prompt_text = """
 
@@ -484,6 +489,105 @@ def debug_outlines_response(model, tokenizer, test_text):
         return debug_info
 
 
+def get_cached_outlines_generator(model, tokenizer, model_id):
+    """
+    Get a cached Outlines generator to avoid recreating models.
+    
+    Args:
+        model: The base model
+        tokenizer: The tokenizer
+        model_id: Unique identifier for this model instance
+        
+    Returns:
+        Generator: Cached or newly created Outlines generator
+    """
+    global _OUTLINES_MODEL_CACHE, _OUTLINES_GENERATOR_CACHE
+    
+    if not OUTLINES_AVAILABLE:
+        return None
+        
+    cache_key = f"{model_id}_{id(model)}"
+    
+    if cache_key not in _OUTLINES_GENERATOR_CACHE:
+        try:
+            # Check memory before creating
+            if torch.cuda.is_available():
+                memory_info = torch.cuda.mem_get_info()
+                available_memory = memory_info[0] / 1024**3
+                if available_memory < 8.0:
+                    print(f"Insufficient memory ({available_memory:.2f} GB) for Outlines caching")
+                    return None
+            
+            print(f"Creating new Outlines generator for cache key: {cache_key}")
+            outlines_model = models.from_transformers(model, tokenizer)
+            json_generator = Generator(outlines_model, Response)
+            
+            _OUTLINES_MODEL_CACHE[cache_key] = outlines_model
+            _OUTLINES_GENERATOR_CACHE[cache_key] = json_generator
+            
+        except Exception as e:
+            print(f"Failed to create cached Outlines generator: {e}")
+            return None
+    
+    return _OUTLINES_GENERATOR_CACHE.get(cache_key)
+
+
+def clear_outlines_cache():
+    """
+    Clear the Outlines model cache to free memory.
+    """
+    global _OUTLINES_MODEL_CACHE, _OUTLINES_GENERATOR_CACHE
+    
+    # Clean up cached objects
+    for key in list(_OUTLINES_GENERATOR_CACHE.keys()):
+        try:
+            del _OUTLINES_GENERATOR_CACHE[key]
+        except:
+            pass
+    
+    for key in list(_OUTLINES_MODEL_CACHE.keys()):
+        try:
+            del _OUTLINES_MODEL_CACHE[key]
+        except:
+            pass
+    
+    _OUTLINES_MODEL_CACHE.clear()
+    _OUTLINES_GENERATOR_CACHE.clear()
+    
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    import gc
+    gc.collect()
+    print("Outlines cache cleared")
+
+
+def check_memory_safety(required_gb=8.0, operation="operation"):
+    """
+    Check if there's sufficient GPU memory for the operation.
+    
+    Args:
+        required_gb (float): Required memory in GB
+        operation (str): Description of the operation
+        
+    Returns:
+        bool: True if sufficient memory, False otherwise
+    """
+    if torch.cuda.is_available():
+        memory_info = torch.cuda.mem_get_info()
+        available_memory = memory_info[0] / 1024**3
+        total_memory = memory_info[1] / 1024**3
+        used_memory = total_memory - available_memory
+        
+        print(f"Memory check for {operation}: {used_memory:.2f}/{total_memory:.2f} GB used, {available_memory:.2f} GB available")
+        
+        if available_memory < required_gb:
+            print(f"WARNING: Insufficient memory for {operation} (need {required_gb:.1f} GB, have {available_memory:.2f} GB)")
+            return False
+        return True
+    return True  # Assume OK if no GPU
+
+
 def run_inference(dataset_dict, output_dir, model_dir):
     """
     Run inference on test dataset using the trained causal model.
@@ -503,7 +607,9 @@ def run_inference(dataset_dict, output_dir, model_dir):
     # Clear GPU cache at start
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        print(f"GPU memory cleared. Available memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        print(f"GPU memory cleared. Total memory: {total_memory:.2f} GB")
+        check_memory_safety(required_gb=4.0, operation="model loading")
     
     # Load trained model and tokenizer with same quantization as training
     print(f"Loading trained model from {model_path}")
@@ -637,7 +743,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
             raw_response_text = ""
             
             if OUTLINES_AVAILABLE:
-                for attempt in range(1):  # Try up to 3 times
+                for attempt in range(1):  # Try up to 1 time to avoid memory issues
                     try:
                         # Check memory before creating Outlines objects
                         if torch.cuda.is_available():
@@ -646,13 +752,40 @@ def run_inference(dataset_dict, output_dir, model_dir):
                             total_memory = memory_info[1] / 1024**3
                             print(f"Memory before Outlines creation: {available_memory:.2f}/{total_memory:.2f} GB")
                             
-                            if available_memory < 3.0:  # Less than 3GB available
-                                print(f"Insufficient memory ({available_memory:.2f} GB), skipping structured generation")
+                            # Prevent 21GB allocation by requiring more available memory
+                            # This is the critical fix: check for sufficient memory before Outlines creation
+                            memory_required = 10.0  # Conservative estimate for Outlines model creation
+                            if available_memory < memory_required:
+                                print(f"CRITICAL: Insufficient memory ({available_memory:.2f} GB), need {memory_required:.1f} GB")
+                                print(f"Skipping structured generation to prevent 21GB allocation error")
                                 break
                         
-                        # Create fresh Outlines model and generator for each attempt
-                        outlines_model = models.from_transformers(model, tokenizer)
-                        json_generator = Generator(outlines_model, Response)
+                        # Try to get cached generator first to avoid recreation
+                        model_id = f"{model_dir}_{article_id}"
+                        json_generator = get_cached_outlines_generator(model, tokenizer, model_id)
+                        
+                        if json_generator is None:
+                            # MEMORY OPTIMIZATION: Temporarily move base model to CPU to free GPU memory
+                            print(f"Moving base model to CPU to create Outlines object...")
+                            original_device = next(model.parameters()).device
+                            model.cpu()
+                            torch.cuda.empty_cache()
+                            
+                            # Check available memory after CPU offload
+                            if torch.cuda.is_available():
+                                memory_info = torch.cuda.mem_get_info()
+                                available_memory = memory_info[0] / 1024**3
+                                print(f"Memory after CPU offload: {available_memory:.2f} GB")
+                            
+                            # Create fresh Outlines model (this will load model on GPU again)
+                            outlines_model = models.from_transformers(model, tokenizer)
+                            json_generator = Generator(outlines_model, Response)
+                            
+                            # Move original model back to GPU after Outlines creation
+                            model.to(original_device)
+                            print(f"Base model restored to {original_device}")
+                        else:
+                            print(f"Using cached Outlines generator for {article_id}")
                         
                         print(f"Attempting structured generation for {article_id} (attempt {attempt + 1})")
                         
@@ -703,7 +836,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
                         print(f"Generated structured response for {article_id}: {len(datasets)} datasets")
                         structured_success = True
                         
-                        # Clear any intermediate caches after successful generation
+                        # Don't delete cached generators, just clear intermediate caches
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
                         
@@ -713,12 +846,31 @@ def run_inference(dataset_dict, output_dir, model_dir):
                         print(f"Structured generation attempt {attempt + 1} failed for {article_id}: {gen_error}")
                         print(f"Error type: {type(gen_error).__name__}")
                         
+                        # Ensure model is moved back to original device on error
+                        try:
+                            if 'original_device' in locals() and not next(model.parameters()).device == original_device:
+                                model.to(original_device)
+                                print(f"Model restored to {original_device} after error")
+                        except:
+                            pass
+                        
+                        # Clean up any partially created objects (but not cached ones)
+                        try:
+                            if 'outlines_model' in locals() and json_generator is None:
+                                # Only delete if we created a new one (not cached)
+                                del outlines_model
+                        except:
+                            pass
+                        
                         # Clear GPU cache on error to prevent memory accumulation
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
                         
-                        if attempt == 2:  # Last attempt
-                            print(f"All structured generation attempts failed for {article_id}")
+                        import gc
+                        gc.collect()
+                        
+                        if attempt == 0:  # Only 1 attempt now
+                            print(f"Structured generation attempt failed for {article_id}")
                         continue
             else:
                 print(f"Skipping structured generation for {article_id} (Outlines not available)")
@@ -733,7 +885,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
                         prompt, 
                         return_tensors="pt", 
                         truncation=True, 
-                        max_length=8192,  # Limit context to reduce memory usage
+                        max_length=MAX_TOKEN_LENGTH,  # Further reduced context to save memory
                         padding=True
                     )
                     inputs = {k: v.to(model.device) for k, v in inputs.items()}
@@ -742,13 +894,16 @@ def run_inference(dataset_dict, output_dir, model_dir):
                     with torch.no_grad():
                         outputs = model.generate(
                             **inputs,
+                            max_new_tokens=MAX_NEW_TOKENS,  # Limit output length
                             temperature=0.1,
                             do_sample=True,
                             top_p=0.9,
                             pad_token_id=tokenizer.eos_token_id,
                             eos_token_id=tokenizer.eos_token_id,
                             repetition_penalty=1.1,
-                            use_cache=False  # Disable KV cache to save memory
+                            use_cache=False,  # Disable KV cache to save memory
+                            low_memory=True,  # Enable low memory mode if available
+                            num_beams=1  # Use greedy decoding to save memory
                         )
                     
                     # Decode response
@@ -758,6 +913,12 @@ def run_inference(dataset_dict, output_dir, model_dir):
                     
                     # Store raw response text for free-form generation
                     raw_response_text = generated_text
+                    
+                    # Clean up generation tensors immediately
+                    del outputs
+                    del inputs
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
                     
                     # Use the new parsing function
                     freeform_datasets = parse_model_response(generated_text)
@@ -820,6 +981,9 @@ def run_inference(dataset_dict, output_dir, model_dir):
             
             # Write empty raw response to file even for failed articles
             write_response_to_file(article_id, "", output_dir)
+    
+    # Clear Outlines cache at the end of inference to free memory
+    clear_outlines_cache()
     
     return results
 
@@ -910,7 +1074,8 @@ def run_inference_simple(dataset_dict, output_dir, model_dir):
                 prompt, 
                 return_tensors="pt", 
                 truncation=True, 
-                padding=True
+                padding=True,
+                max_length=MAX_TOKEN_LENGTH
             )
             inputs = {k: v.to(model.device) for k, v in inputs.items()}
             

@@ -3,8 +3,10 @@ import sys
 import pandas as pd
 
 # Set PyTorch CUDA memory management environment variables for better memory handling
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,max_split_size_mb:512'
+# Prevent large allocations and improve memory fragmentation handling
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,max_split_size_mb:256,roundup_power2_divisions:16'
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'  # For better error reporting
+os.environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'  # Disable memory caching for more predictable behavior
 
 from make_data_count_kaggle.causal_model import run_inference, run_inference_simple
 from make_data_count_kaggle.data_preprocessing import convert_labels_csv_to_json, convert_pdfs_to_text, convert_xmls_to_text, create_huggingface_dataset, decompose_text_to_paragraphs, decompose_train_labels
@@ -24,6 +26,18 @@ def main(input_directory, output_directory, model_dir):
     # Clear any Python garbage before model loading
     import gc
     gc.collect()
+    
+    # Additional memory optimization
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        # Check available memory before proceeding
+        memory_info = torch.cuda.mem_get_info()
+        available_memory = memory_info[0] / 1024**3
+        total_memory = memory_info[1] / 1024**3
+        print(f"Pre-inference memory check: {available_memory:.2f}/{total_memory:.2f} GB available")
+        
+        if available_memory < 5.0:
+            print(f"WARNING: Low GPU memory ({available_memory:.2f} GB). Consider using smaller model or batch size.")
 
     # Causal model training
     SUBMISSION_FILE = "submission.csv"
@@ -39,6 +53,9 @@ def main(input_directory, output_directory, model_dir):
         import torch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            memory_info = torch.cuda.mem_get_info()
+            available_memory = memory_info[0] / 1024**3
+            print(f"Memory after clearing cache: {available_memory:.2f} GB available")
         gc.collect()
         inference_results = run_inference_simple(dataset_dict, output_directory, model_dir)
     
