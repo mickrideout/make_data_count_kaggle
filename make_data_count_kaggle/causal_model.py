@@ -11,6 +11,7 @@ from typing import List
 import re
 
 MAX_NEW_TOKENS = 4000
+MAX_CHARS_PER_ARTICLE = 100000
 
 # Try to import Outlines, but handle gracefully if not available
 try:
@@ -611,7 +612,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
             article_text = load_article_text(article_id, output_dir)
             
             # Truncate article text if too long to prevent memory issues
-            max_article_length = 50000  # Limit article to ~50k characters
+            max_article_length = MAX_CHARS_PER_ARTICLE  # Limit article to ~50k characters
             if len(article_text) > max_article_length:
                 print(f"Truncating article {article_id} from {len(article_text)} to {max_article_length} characters")
                 article_text = article_text[:max_article_length] + "\n[... text truncated ...]"
