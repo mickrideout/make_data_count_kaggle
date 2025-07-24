@@ -207,11 +207,11 @@ def train_causal_model(dataset_dict, output_dir, model_dir):
         local_files_only=True
     )
     
-    # Add LoRA adapters for memory-efficient fine-tuning (reduced rank for 14B model)
+    # Add LoRA adapters for memory-efficient fine-tuning (anti-overfitting config for small dataset)
     peft_config = LoraConfig(
-        lora_alpha=16,
-        lora_dropout=0.1,
-        r=32,  # Reduced from 64 to 32 for better memory efficiency
+        lora_alpha=8,  # Reduced from 16 to 8 for weaker adaptation
+        lora_dropout=0.2,  # Increased from 0.1 to 0.2 for more regularization
+        r=16,  # Reduced from 32 to 16 to prevent overfitting
         bias="none",
         task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
@@ -266,11 +266,11 @@ def train_causal_model(dataset_dict, output_dir, model_dir):
                 add_generation_prompt=False
             )
     
-    # Training arguments optimized for LoRA + quantization (14B model on 24GB GPU)
+    # Training arguments optimized for anti-overfitting on small dataset
     training_args = TrainingArguments(
         output_dir=str(model_dir),
         overwrite_output_dir=True,
-        num_train_epochs=3,  # More epochs since LoRA needs more training
+        num_train_epochs=2,  # Reduced from 3 to 2 to prevent overfitting
         per_device_train_batch_size=1,  # Reduced from 2 to 1 for 14B model
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=8,  # Increased to maintain effective batch size = 1*8 = 8
@@ -286,7 +286,7 @@ def train_causal_model(dataset_dict, output_dir, model_dir):
         report_to=None,  # Disable wandb logging
         dataloader_num_workers=0,  # Disable multiprocessing
         optim="paged_adamw_32bit",  # Memory-efficient optimizer
-        learning_rate=2e-4,  # Higher learning rate for LoRA
+        learning_rate=1e-4,  # Reduced from 2e-4 to 1e-4 for gentler adaptation
         max_steps=-1,  # Use epochs instead of steps
         ddp_find_unused_parameters=False,  # Optimization for DDP
     )
