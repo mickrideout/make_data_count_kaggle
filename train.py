@@ -30,7 +30,7 @@ if __name__ == "__main__":
         dataset_dict = create_huggingface_dataset(output_directory)
 
         # Causal model training
-        train_causal_model(dataset_dict, output_directory, model_dir)
+        #train_causal_model(dataset_dict, output_directory, model_dir)
 
         # Causal model inference
         inference_results = run_inference(dataset_dict, output_directory, model_dir)

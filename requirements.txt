@@ -16,3 +16,4 @@ peft
 pydantic
 outlines
 jinja2>=3.1.0
+autoawq
