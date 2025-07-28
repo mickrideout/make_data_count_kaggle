@@ -7,7 +7,7 @@ from peft import LoraConfig, get_peft_model
 from datasets import Dataset as HFDataset
 import torch
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Literal
 import re
 
 MAX_NEW_TOKENS = 4000
@@ -98,12 +98,12 @@ Each extracted dataset should have the following fields:
 
 """
 
-class Dataset(BaseModel):
+class DatasetMention(BaseModel):
     dataset_name: str = Field(description="The name of the dataset")
-    dataset_type: str = Field(description="The type of the dataset")
+    dataset_type: Literal["Primary", "Secondary"]
 
 class Response(BaseModel):
-    datasets: List[Dataset] = Field(description="The list of datasets")
+    datasets: List[DatasetMention] = Field(description="The list of datasets")
 
 
 def load_article_text(article_id, output_dir):
@@ -411,7 +411,7 @@ def parse_model_response(response_text):
             if isinstance(parsed_data, list):
                 for item in parsed_data:
                     if isinstance(item, dict) and 'dataset_name' in item and 'dataset_type' in item:
-                        datasets.append(Dataset(
+                        datasets.append(DatasetMention(
                             dataset_name=item['dataset_name'],
                             dataset_type=item['dataset_type']
                         ))
@@ -542,34 +542,6 @@ def get_cached_outlines_generator(model, tokenizer, model_id):
     return _OUTLINES_GENERATOR_CACHE.get(cache_key)
 
 
-def clear_outlines_cache():
-    """
-    Clear the Outlines model cache to free memory.
-    """
-    global _OUTLINES_MODEL_CACHE, _OUTLINES_GENERATOR_CACHE
-    
-    # Clean up cached objects
-    for key in list(_OUTLINES_GENERATOR_CACHE.keys()):
-        try:
-            del _OUTLINES_GENERATOR_CACHE[key]
-        except:
-            pass
-    
-    for key in list(_OUTLINES_MODEL_CACHE.keys()):
-        try:
-            del _OUTLINES_MODEL_CACHE[key]
-        except:
-            pass
-    
-    _OUTLINES_MODEL_CACHE.clear()
-    _OUTLINES_GENERATOR_CACHE.clear()
-    
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    
-    import gc
-    gc.collect()
-    print("Outlines cache cleared")
 
 
 def check_memory_safety(required_gb=8.0, operation="operation"):
@@ -700,7 +672,11 @@ def run_inference(dataset_dict, output_dir, model_dir):
     
     # Test Outlines integration first
     outlines_working = test_outlines_integration(model, tokenizer)
-    if not outlines_working:
+    if outlines_working:
+        print("Creating a single Outlines generator for all inferences.")
+        outlines_model = models.from_transformers(model, tokenizer)
+        json_generator = Generator(outlines_model, Response)
+    else:
         print("Outlines integration failed, will use free-form generation only")
     
     # Get unique article IDs from test dataset
@@ -721,8 +697,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
                 if available_memory < 2.0:
                     print(f"Low memory detected ({available_memory:.2f} GB), clearing cache")
                     torch.cuda.empty_cache()
-                    import gc
-                    gc.collect()
+
             
             # Load article text
             article_text = load_article_text(article_id, output_dir)
@@ -752,161 +727,50 @@ def run_inference(dataset_dict, output_dir, model_dir):
             structured_success = False
             raw_response_text = ""
             
-            if OUTLINES_AVAILABLE:
-                for attempt in range(1):  # Try up to 1 time to avoid memory issues
-                    try:
-                        # Check memory before creating Outlines objects
-                        if torch.cuda.is_available():
-                            memory_info = torch.cuda.mem_get_info()
-                            available_memory = memory_info[0] / 1024**3
-                            total_memory = memory_info[1] / 1024**3
-                            print(f"Memory before Outlines creation: {available_memory:.2f}/{total_memory:.2f} GB")
-                            
-                            # Prevent 21GB allocation by requiring more available memory
-                            # KAGGLE-SPECIFIC: Even more conservative threshold for 15GB GPU
-                            memory_required = 12.0 if total_memory < 16.0 else 10.0  # Higher threshold for Kaggle
-                            if available_memory < memory_required:
-                                print(f"CRITICAL: Insufficient memory ({available_memory:.2f} GB), need {memory_required:.1f} GB")
-                                print(f"Skipping structured generation to prevent 21GB allocation error")
-                                print(f"GPU total memory: {total_memory:.2f} GB (Kaggle-optimized threshold)")
-                                break
-                        
-                        # CRITICAL FIX: Don't use caching in memory-constrained environments
-                        # Create fresh Outlines objects for each inference to ensure clean memory state
-                        print(f"Creating fresh Outlines generator for {article_id} (no caching)")
-                        
-                        # Clear any existing cache first to free memory
-                        clear_outlines_cache()
-                        
-                        # MEMORY OPTIMIZATION: Temporarily move base model to CPU to free GPU memory
-                        print(f"Moving base model to CPU to create Outlines object...")
-                        original_device = next(model.parameters()).device
-                        model.cpu()
-                        torch.cuda.empty_cache()
-                        import gc
-                        gc.collect()
-                        
-                        # Check available memory after CPU offload
-                        if torch.cuda.is_available():
-                            memory_info = torch.cuda.mem_get_info()
-                            available_memory = memory_info[0] / 1024**3
-                            print(f"Memory after CPU offload: {available_memory:.2f} GB")
-                        
-                        # Create fresh Outlines model (this will load model on GPU again)
-                        outlines_model = models.from_transformers(model, tokenizer)
-                        json_generator = Generator(outlines_model, Response)
-                        
-                        # Move original model back to GPU after Outlines creation
-                        model.to(original_device)
-                        print(f"Base model restored to {original_device}")
-                        
-                        print(f"Attempting structured generation for {article_id} (attempt {attempt + 1})")
-                        
-                        # Check available memory before generation
-                        if torch.cuda.is_available():
-                            available_memory = torch.cuda.mem_get_info()[0] / 1024**3
-                            if available_memory < 2.0:  # Less than 2GB available
-                                print(f"Low GPU memory ({available_memory:.2f} GB), clearing cache")
-                                torch.cuda.empty_cache()
-                        
-                        response = json_generator(prompt, max_new_tokens=MAX_NEW_TOKENS, temperature=0.1, top_p=0.9, repetition_penalty=1.1)
-                        response_str = str(response)
-                        print(f"Raw response type: {type(response)}")
-                        print(f"Raw response length: {len(response_str)} characters")
-                        print(f"Raw response preview: {response_str[:200]}{'...' if len(response_str) > 200 else ''}")
-                        
-                        # Store raw response text
-                        raw_response_text = str(response)
-                        print(f"Stored raw response length: {len(raw_response_text)} characters")
-                        
-                        # Handle different response types
+            if OUTLINES_AVAILABLE and outlines_working:
+                try:
+                    # Check memory before Outlines generation
+                    if torch.cuda.is_available():
+                        memory_info = torch.cuda.mem_get_info()
+                        available_memory = memory_info[0] / 1024**3
+                        total_memory = memory_info[1] / 1024**3
+                        print(f"Memory before Outlines generation: {available_memory:.2f}/{total_memory:.2f} GB")
+
+                        # More conservative memory check
+                        memory_required = 8.0 if total_memory < 16.0 else 6.0
+                        if available_memory < memory_required:
+                            raise MemoryError(f"Insufficient memory for Outlines ({available_memory:.2f}GB available, {memory_required:.1f}GB required)")
+
+                    print(f"Attempting structured generation for {article_id}")
+                    response = json_generator(prompt, max_new_tokens=MAX_NEW_TOKENS, temperature=0.1, top_p=0.9, repetition_penalty=1.1)
+                    raw_response_text = str(response)
+                    
+                    # Handle different response types
+                    if hasattr(response, 'datasets'):
+                        datasets = response.datasets
+                    elif isinstance(response, dict) and 'datasets' in response:
+                        datasets = response['datasets']
+                    elif isinstance(response, str):
+                        parsed_response = json.loads(response)
+                        if 'datasets' in parsed_response:
+                            datasets = parsed_response['datasets']
+                    else:
                         datasets = []
-                        if hasattr(response, 'datasets'):
-                            datasets = response.datasets
-                        elif isinstance(response, dict) and 'datasets' in response:
-                            datasets = response['datasets']
-                        elif isinstance(response, list):
-                            datasets = response
-                        elif isinstance(response, str):
-                            # Try to parse string response as JSON
-                            try:
-                                parsed_response = json.loads(response)
-                                if isinstance(parsed_response, list):
-                                    datasets = parsed_response
-                                elif isinstance(parsed_response, dict) and 'datasets' in parsed_response:
-                                    datasets = parsed_response['datasets']
-                                else:
-                                    print(f"Unexpected parsed response format for {article_id}: {type(parsed_response)}")
-                            except json.JSONDecodeError:
-                                print(f"Failed to parse string response as JSON for {article_id}: {len(response)} characters")
-                                print(f"Response preview: {str(response)[:100]}{'...' if len(str(response)) > 100 else ''}")
-                        else:
-                            print(f"Unexpected response format for {article_id}: {type(response)}")
-                            response_content = str(response)
-                            print(f"Response content length: {len(response_content)} characters")
-                            print(f"Response content preview: {response_content[:200]}{'...' if len(response_content) > 200 else ''}")
-                        
-                        print(f"Generated structured response for {article_id}: {len(datasets)} datasets")
-                        structured_success = True
-                        
-                        # CRITICAL: Immediately clean up Outlines objects after successful generation
-                        try:
-                            del json_generator
-                            del outlines_model
-                            print("Outlines objects deleted after successful generation")
-                        except:
-                            pass
-                        
-                        # Aggressive memory cleanup
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                        import gc
-                        gc.collect()
-                        
-                        break
-                        
-                    except Exception as gen_error:
-                        print(f"Structured generation attempt {attempt + 1} failed for {article_id}: {gen_error}")
-                        print(f"Error type: {type(gen_error).__name__}")
-                        
-                        # Ensure model is moved back to original device on error
-                        try:
-                            if 'original_device' in locals() and not next(model.parameters()).device == original_device:
-                                model.to(original_device)
-                                print(f"Model restored to {original_device} after error")
-                        except:
-                            pass
-                        
-                        # CRITICAL: Clean up all Outlines objects on error
-                        try:
-                            if 'json_generator' in locals():
-                                del json_generator
-                                print("json_generator deleted after error")
-                        except:
-                            pass
-                        
-                        try:
-                            if 'outlines_model' in locals():
-                                del outlines_model
-                                print("outlines_model deleted after error")
-                        except:
-                            pass
-                        
-                        # Clear GPU cache on error to prevent memory accumulation
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                        
-                        import gc
-                        gc.collect()
-                        
-                        if attempt == 0:  # Only 1 attempt now
-                            print(f"Structured generation attempt failed for {article_id}")
-                        continue
+
+                    print(f"Generated structured response for {article_id}: {len(datasets)} datasets")
+                    structured_success = True
+
+                except Exception as gen_error:
+                    print(f"Structured generation failed for {article_id}: {gen_error}")
+                    structured_success = False
+                    # Clean up memory aggressively on failure
+
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
             else:
                 print(f"Skipping structured generation for {article_id} (Outlines not available)")
             
             # If structured generation failed or returned no datasets, try free-form generation
-            if not structured_success:
                 try:
                     print(f"Attempting free-form generation for {article_id}")
                     
@@ -985,35 +849,7 @@ def run_inference(dataset_dict, output_dir, model_dir):
                     else:
                         dataset_names.append(str(d))
                 print(f"Sample datasets: {dataset_names}{'...' if len(datasets) > 3 else ''}")
-            
-            # ENHANCED: More aggressive cleanup after each article
-            # Clear any accumulated gradients
-            for param in model.parameters():
-                param.grad = None
-            
-            # Clear any remaining Outlines cache
-            clear_outlines_cache()
-            
-            # Multiple rounds of garbage collection and cache clearing
-            import gc
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                gc.collect()
-                torch.cuda.empty_cache()  # Second round
-                
-                available_memory = torch.cuda.mem_get_info()[0] / 1024**3
-                print(f"GPU memory cleared after {article_id}. Available: {available_memory:.2f} GB")
-                
-                # If memory is still critically low after cleanup, force more aggressive cleanup
-                if available_memory < 3.0:
-                    print(f"WARNING: Memory still low ({available_memory:.2f} GB) after cleanup")
-                    # Additional cleanup rounds
-                    for _ in range(3):
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                    
-                    final_memory = torch.cuda.mem_get_info()[0] / 1024**3
-                    print(f"After aggressive cleanup: {final_memory:.2f} GB available")
+        
             
         except Exception as e:
             print(f"Error processing article {article_id}: {e}")
