@@ -9,7 +9,7 @@ os.environ['CUDA_LAUNCH_BLOCKING'] = '1'  # For better error reporting
 os.environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'  # Disable memory caching for more predictable behavior
 
 from make_data_count_kaggle.causal_model import run_inference, run_inference_simple
-from make_data_count_kaggle.data_preprocessing import convert_labels_csv_to_json, convert_pdfs_to_text, convert_xmls_to_text, create_huggingface_dataset, decompose_text_to_paragraphs, decompose_train_labels
+from make_data_count_kaggle.data_preprocessing import convert_labels_csv_to_json, convert_pdfs_to_text, convert_xmls_to_text, create_huggingface_dataset, decompose_text_to_chunks, decompose_train_labels
 
 
 def main(input_directory, output_directory, model_dir):
@@ -22,9 +22,9 @@ def main(input_directory, output_directory, model_dir):
     # Dataset preprocessing
     decompose_train_labels(input_directory, output_directory)
     convert_labels_csv_to_json(output_directory)
-    convert_xmls_to_text(f"{input_directory}/train", output_directory)
-    convert_pdfs_to_text(f"{input_directory}/train", output_directory)
-    decompose_text_to_paragraphs(output_directory)
+    convert_xmls_to_text(f"{input_directory}/test", output_directory)
+    convert_pdfs_to_text(f"{input_directory}/test", output_directory)
+    decompose_text_to_chunks(output_directory)
     dataset_dict = create_huggingface_dataset(output_directory)
     
     # Clear any Python garbage before model loading

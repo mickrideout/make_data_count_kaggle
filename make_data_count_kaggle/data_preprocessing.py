@@ -2,7 +2,8 @@ import os
 import glob
 import pickle
 import signal
-import pymupdf4llm
+import fitz
+from io import StringIO
 import xml.etree.ElementTree as ET
 import re
 import pandas as pd
@@ -11,75 +12,74 @@ import concurrent.futures
 from functools import partial
 import json
 from datasets import Dataset, DatasetDict
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
+
+def remove_references_section(text):
+    lines = text.split('\n')
+    cut_index = -1
+    
+    # Look backwards from end of document
+    for i in range(len(lines) - 1, max(0, int(len(lines) * 0.3)), -1):
+        line = lines[i].strip()
+        
+        obvious_patterns = [
+            r'^REFERENCES?$',
+            r'^\d+\.?\s+REFERENCES?$',
+            r'^\d+\.?\s+References?$',
+            r'^References?:?$',
+            r'^BIBLIOGRAPHY$',
+            r'^\d+\.?\s+BIBLIOGRAPHY$',
+            r'^\d+\.?\s+Bibliography$',
+            r'^Bibliography:?$',
+            r'^Literature\s+Cited$',
+            r'^Works\s+Cited$'
+        ]
+        
+        if any(re.match(pattern, line, re.IGNORECASE) for pattern in obvious_patterns):
+            # Double-check: look at following lines for citation patterns
+            following_lines = lines[i+1:i+4]
+            has_citations = False
+            
+            for follow_line in following_lines:
+                if follow_line.strip():
+                    # Check for obvious citation patterns
+                    if (re.search(r'\(\d{4}\)', follow_line) or    # (2020)
+                        re.search(r'\d{4}\.', follow_line) or       # 2020.
+                        'doi:' in follow_line.lower() or           # DOI
+                        ' et al' in follow_line.lower()):          # et al
+                        has_citations = True
+                        break
+            
+            # Only cut if we found citation-like content
+            if has_citations or i >= len(lines) - 3:  # Or very near end
+                cut_index = i
+                break
+    
+    if cut_index != -1:
+        return '\n'.join(lines[:cut_index]).strip()
+    
+    return text.strip()
 
 def clean_text(text):
     """
-    Clean up text by removing column breaks and creating natural paragraphs.
+    Clean up text by removing references section.
     
     Args:
-        text (str): Raw text from pymupdf4llm
+        text (str): Raw text from PyMuPDF
         
     Returns:
-        str: Cleaned text with natural paragraphs
+        str: Cleaned text with references section removed
     """
-    # First, normalize line endings
-    text = text.replace('\r\n', '\n').replace('\r', '\n')
-    
-    # Split into lines and process
-    lines = text.split('\n')
-    cleaned_lines = []
-    current_paragraph = []
-    
-    for i, line in enumerate(lines):
-        line = line.strip()
-        
-        # Skip empty lines
-        if not line:
-            # If we have accumulated text, join it and add to cleaned lines
-            if current_paragraph:
-                cleaned_lines.append(' '.join(current_paragraph))
-                current_paragraph = []
-            cleaned_lines.append('')
-            continue
-        
-        # Check if this line should start a new paragraph
-        should_start_new = (
-            line.startswith('#') or  # Headers
-            line.startswith('- ') or  # List items
-            line.startswith('* ') or  # List items
-            line.startswith('1. ') or  # Numbered lists
-            line.startswith('**') or   # Bold text
-            line.startswith('```') or  # Code blocks
-            line.startswith('|') or    # Table rows
-            (i > 0 and lines[i-1].strip() and 
-             lines[i-1].strip().endswith(('.', '!', '?', ':', ';')))  # Previous line ended with punctuation
-        )
-        
-        # If we should start a new paragraph and we have accumulated text
-        if should_start_new and current_paragraph:
-            cleaned_lines.append(' '.join(current_paragraph))
-            current_paragraph = []
-        
-        # Add current line to paragraph or start new one
-        if should_start_new:
-            cleaned_lines.append(line)
-        else:
-            current_paragraph.append(line)
-    
-    # Add any remaining paragraph
-    if current_paragraph:
-        cleaned_lines.append(' '.join(current_paragraph))
-    
-    # Join all lines
-    cleaned_text = '\n'.join(cleaned_lines) 
+    # Remove references section
+    cleaned_text = remove_references_section(text)
     
     return cleaned_text
 
 
 def _convert_pdf_to_text_worker(pdf_file, output_dir):
     """
-    Worker function to convert a single PDF to text with a 2-minute timeout.
+    Worker function to convert a single PDF to text using PyMuPDF with a 2-minute timeout.
     """
     pdf_path = Path(pdf_file)
     output_path = Path(output_dir)
@@ -91,14 +91,36 @@ def _convert_pdf_to_text_worker(pdf_file, output_dir):
 
     # Define a handler for the timeout
     def handler(signum, frame):
-        raise TimeoutError("PDF conversion timed out after 10 minutes")
+        raise TimeoutError("PDF conversion timed out after 2 minutes")
 
     # Set the signal handler and a 2-minute (120 seconds) alarm
     signal.signal(signal.SIGALRM, handler)
     signal.alarm(120)
 
     try:
-        text = pymupdf4llm.to_markdown(str(pdf_path))
+        # Use PyMuPDF to extract text
+        text_parts = []
+        
+        with fitz.open(str(pdf_path)) as pdf:
+            for page in pdf:
+                # Extract text from the page
+                page_text = page.get_text()
+                if page_text:
+                    text_parts.append(page_text)
+                
+                # Extract tables from the page using table finder
+                tables = page.find_tables()
+                for table in tables:
+                    if table and len(table.extract()) > 0:
+                        # Convert table to text representation
+                        table_data = table.extract()
+                        table_text = '\n'.join(['\t'.join([str(cell) if cell else '' for cell in row]) for row in table_data])
+                        if table_text.strip():
+                            text_parts.append(table_text)
+        
+        # Combine all text parts
+        text = '\n\n'.join(text_parts)
+        
         if text.strip():
             cleaned_text = clean_text(text)
             with open(output_file, 'w', encoding='utf-8') as f:
@@ -119,7 +141,7 @@ def _convert_pdf_to_text_worker(pdf_file, output_dir):
 
 def convert_pdfs_to_text(input_dir, output_dir):
     """
-    Convert all PDF files in input_dir to text files in output_dir using pymupdf4llm in parallel.
+    Convert all PDF files in input_dir to text files in output_dir using PyMuPDF in parallel.
     
     Args:
         input_dir (str): Directory containing PDF files to convert
@@ -170,7 +192,7 @@ def _convert_xml_to_text_worker(xml_file, output_dir):
     try:
         tree = ET.parse(xml_file)
         root = tree.getroot()
-        text = "".join(root.itertext())
+        text = " ".join(root.itertext())
         
         if text.strip():
             cleaned_text = clean_text(text)
@@ -223,7 +245,7 @@ def convert_xmls_to_text(input_dir, output_dir):
 
 def _decompose_text_worker(text_file, output_dir):
     """
-    Worker function to decompose a single text file into paragraphs.
+    Worker function to decompose a single text file into chunks using RecursiveCharacterTextSplitter.
     """
     text_path = Path(text_file)
     output_path = Path(output_dir)
@@ -237,21 +259,30 @@ def _decompose_text_worker(text_file, output_dir):
         with open(text_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Paragraphs are separated by blank lines
-        paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+        # Use RecursiveCharacterTextSplitter to split text into chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=2000,
+            chunk_overlap=200,
+            length_function=len,
+            is_separator_regex=False
+        )
+        
+        chunks = text_splitter.split_text(content)
+        chunks = [chunk.strip() for chunk in chunks if chunk.strip()]
+
         
         with open(pickle_file, 'wb') as f:
-            pickle.dump(paragraphs, f)
+            pickle.dump(chunks, f)
             
-        return f"Successfully decomposed {text_path.name} into {len(paragraphs)} paragraphs"
+        return f"Successfully decomposed {text_path.name} into {len(chunks)} chunks"
     except Exception as e:
         return f"Error decomposing {text_path.name}: {str(e)}"
 
 
-def decompose_text_to_paragraphs(output_dir):
+def decompose_text_to_chunks(output_dir):
     """
-    Decompose all text in output_dir into paragraphs and save the paragraph 
-    arrays as pickle files in parallel.
+    Decompose all text in output_dir into chunks using RecursiveCharacterTextSplitter 
+    and save the chunk arrays as pickle files in parallel.
     
     Args:
         output_dir (str): Directory containing text files to decompose
@@ -465,4 +496,4 @@ if __name__ == "__main__":
     
     convert_pdfs_to_text(input_directory, output_directory)
     convert_xmls_to_text(input_directory, output_directory)
-    decompose_text_to_paragraphs(output_directory)
+    decompose_text_to_chunks(output_directory)

@@ -18,7 +18,7 @@ The codebase follows a modular pipeline architecture with three main processing 
 ### Core Modules
 
 - **`data_preprocessing.py`**: Converts PDFs/XMLs to text and decomposes into paragraphs
-  - Uses `pymupdf4llm` for PDF conversion with 2-minute timeouts per file
+  - Uses `pdfplumber` for PDF conversion with 2-minute timeouts per file
   - Parallel processing with `ProcessPoolExecutor`
   - Outputs `.txt` files and pickled paragraph arrays
 
@@ -76,7 +76,7 @@ python make_data_count_kaggle/data_preprocessing.py <input_dir> <output_dir>
 
 ## Key Dependencies
 
-- `PyMuPDF` / `pymupdf4llm`: PDF text extraction
+- `pdfplumber`: PDF text extraction
 - `pandas`: Data manipulation
 - `mlflow`: Experiment tracking
 - `fuzzywuzzy`: Text matching utilities

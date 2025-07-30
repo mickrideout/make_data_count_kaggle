@@ -1,7 +1,6 @@
 PyMuPDF
 pandas
 mrkdwn_analysis
-pymupdf4llm
 mlflow
 requests
 fuzzywuzzy
@@ -17,3 +16,5 @@ pydantic
 outlines
 jinja2>=3.1.0
 autoawq
+langchain
+sdv

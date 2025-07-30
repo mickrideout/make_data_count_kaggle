@@ -3,7 +3,7 @@ import sys
 import pandas as pd
 import mlflow
 
-from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_paragraphs, decompose_train_labels, convert_labels_csv_to_json, create_huggingface_dataset
+from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_chunks, decompose_train_labels, convert_labels_csv_to_json, create_huggingface_dataset
 from make_data_count_kaggle.evaluation import calculate_f1_score
 from make_data_count_kaggle.causal_model import train_causal_model, run_inference
 
@@ -26,7 +26,7 @@ if __name__ == "__main__":
         convert_labels_csv_to_json(output_directory)
         convert_xmls_to_text(f"{input_directory}/train", output_directory)
         convert_pdfs_to_text(f"{input_directory}/train", output_directory)
-        decompose_text_to_paragraphs(output_directory)
+        decompose_text_to_chunks(output_directory)
         dataset_dict = create_huggingface_dataset(output_directory)
 
         # Causal model training
