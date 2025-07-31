@@ -1,205 +1,153 @@
 #!/usr/bin/env python3
+"""
+Zotero Papers with Code Linker
 
-# Given a Zotero collection name, find all items with a Papers with Code link.
-
-# Download the "All papers with abstracts" from here: https://github.com/paperswithcode/paperswithcode-data and decompress it.
-
-# Pip install these:
-# pyzotero
-# fuzzywuzzy
-# python-Levenshtein
-
+Links papers in a Zotero collection with their corresponding GitHub repositories
+from Papers with Code using fuzzy title matching.
+"""
 
 import argparse
 import json
 import sys
-from typing import Dict, List, Any
+from typing import Dict, List, Optional
+
 from pyzotero import zotero
 from fuzzywuzzy import fuzz
-from fuzzywuzzy import process
 
 
-class ZoteroPwcLinker:
-    def __init__(self, api_key: str, user_id: str, collection_name: str):
-        self.api_key = api_key
-        self.user_id = user_id
-        self.collection_name = collection_name
-        
-        # Validate API key format
-        if not api_key or len(api_key) < 20:
-            raise ValueError("API key appears to be invalid. Zotero API keys are typically 32 characters long.")
-        
-        # Initialise pyzotero client
-        self.zot = zotero.Zotero(user_id, 'user', api_key)
-        # Test the connection
-        try:
-            print("Testing Zotero connection...")
-            test_collections = self.zot.collections()
-            print(f"Successfully connected to Zotero. Found {len(test_collections)} collections.")
-        except Exception as e:
-            print(f"Failed to connect to Zotero: {e}")
-            raise
-        
-    def get_collection_id(self) -> str:
-        """Get the collection ID by name"""
-        collections = self.zot.collections()
+class ZoteroPWCLinker:
+    def __init__(self, user_id: str, api_key: str):
+        self.zotero = zotero.Zotero(user_id, 'user', api_key)
+
+    def get_collection_id(self, collection_name: str) -> Optional[str]:
+        """Get collection ID by name"""
+        collections = self.zotero.collections()
         
         for collection in collections:
-            if collection['data']['name'] == self.collection_name:
+            if collection['data']['name'] == collection_name:
                 return collection['key']
         
-        raise ValueError(f"Collection '{self.collection_name}' not found")
-    
-    def get_collection_items(self, collection_id: str) -> List[Dict[str, Any]]:
-        """Get all items in the collection"""
-        print(f"Fetching items from collection {collection_id}...")
-        all_items = self.zot.collection_items(collection_id)
-        print(f"Retrieved {len(all_items)} total items")
-        # Filter out attachments and only return top-level items
-        top_items = [item for item in all_items if item['data'].get('parentItem') is None]
-        print(f"Found {len(top_items)} top-level items")
-        return top_items
-    
-    def find_best_match(self, paper_title: str, pwc_data: List[Dict[str, Any]], threshold: int = 80) -> Dict[str, Any]:
-        """Find the best matching paper title using fuzzy matching"""
-        titles = [item["title"] for item in pwc_data]
-        best_match = process.extractOne(paper_title, titles, scorer=fuzz.token_sort_ratio)
-        
-        if best_match and best_match[1] >= threshold:
-            match_title = best_match[0]
-            return next(item for item in pwc_data if item["title"] == match_title)
+        print(f"Collection '{collection_name}' not found")
         return None
-    
-    def add_web_link_attachment(self, item_key: str, url: str, title: str = "Papers with Code"):
+
+    def get_collection_items(self, collection_id: str) -> List[Dict]:
+        """Get all items in a collection"""
+        return self.zotero.collection_items(collection_id)
+
+    def find_best_match(self, paper_title: str, pwc_data: List[Dict]) -> Optional[Dict]:
+        """Find the best matching paper using fuzzy string matching"""
+        best_match = None
+        best_ratio = 0
+        threshold = 80  # Minimum similarity threshold
+        
+        for paper in pwc_data:
+            pwc_title = paper.get('paper_title')
+            if not pwc_title:
+                continue
+            ratio = fuzz.ratio(paper_title.lower(), pwc_title.lower())
+            if ratio > best_ratio and ratio >= threshold:
+                best_ratio = ratio
+                best_match = paper
+        
+        return best_match
+
+    def add_attachment_to_item(self, item_key: str, repo_url: str, paper_title: str) -> bool:
         """Add a web link attachment to a Zotero item"""
         attachment_data = {
             "itemType": "attachment",
             "linkMode": "linked_url",
-            "url": url,
-            "title": title,
-            "parentItem": item_key,
-            "accessDate": ""
+            "title": f"CODE Repository - {paper_title}",
+            "url": repo_url,
+            "note": "Added by Zotero PWC Linker",
+            "parentItem": item_key
         }
         
         try:
-            # Create attachment using pyzotero
-            self.zot.create_items([attachment_data])
+            self.zotero.create_items([attachment_data])
+            print(f"✓ Added GitHub link for: {paper_title}")
             return True
         except Exception as e:
-            raise Exception(f"Failed to create attachment: {e}")
-    
-    def process_collection(self, pwc_data: List[Dict[str, Any]]):
-        """Process all items in the collection and add PwC links where matches are found"""
+            print(f"✗ Failed to add attachment for: {paper_title} (Error: {e})")
+            return False
+
+    def has_code_repository_attachment(self, item_key: str) -> bool:
+        """Check if an item already has a CODE Repository attachment"""
         try:
-            print("Getting collection ID...")
-            collection_id = self.get_collection_id()
-            print(f"Collection ID: {collection_id}")
-            items = self.get_collection_items(collection_id)
-            print("Saving debug data...")
-            with open("/tmp/debug.json", "w", encoding="utf-8") as debug_file:
-                json.dump(items, debug_file, ensure_ascii=False, indent=2)
-            
-            print(f"Processing {len(items)} items in collection '{self.collection_name}'")
-            
-            matches_found = 0
-            skipped_items = 0
-            for item in items:
-                try:
-                    if "data" not in item:
-                        print(f"- Skipping item without data: {item.get('key', 'unknown')}")
-                        skipped_items += 1
-                        continue
-                        
-                    item_type = item["data"].get("itemType", "")
-                    title = item["data"].get("title", "")
-                    
-                    if item_type in ["journalArticle", "conferencePaper", "preprint", "webpage"]:
-                        if title:
-                            match = self.find_best_match(title, pwc_data)
-                            if match:
-                                try:
-                                    existing_attachments = self.zot.children(item["key"])
-                                    already_linked = False
-                                    for att in existing_attachments:
-                                        if att["data"].get("itemType") == "attachment" and att["data"].get("linkMode") == "linked_url":
-                                            url = att["data"].get("url", "")
-                                            if url and url.strip().startswith("https://paperswithcode.com/"):
-                                                already_linked = True
-                                                break
-                                    if already_linked:
-                                        print(f"- PwC link already exists for: {title}")
-                                    else:
-                                        self.add_web_link_attachment(
-                                            item["key"], 
-                                            match["paper_url"],
-                                            f"Papers with Code: {match['title']}"
-                                        )
-                                        print(f"✓ Added PwC link to: {title}")
-                                        matches_found += 1
-                                except Exception as e:
-                                    print(f"✗ Failed to add attachment for '{title}': {e}")
-                                    print(f"  Continuing with next paper...")
-                            else:
-                                print(f"- No match found for: {title}")
-                        else:
-                            print(f"- Skipping {item_type} with no title")
-                    else:
-                        print(f"- Skipping {item_type} item")
-                        skipped_items += 1
-                except Exception as e:
-                    print(f"✗ Error processing item: {e}")
-                    print(f"  Item key: {item.get('key', 'unknown')}")
-                    print(f"  Continuing with next paper...")
-                    continue
-            
-            print(f"\nSummary: {matches_found} matches found and linked, {skipped_items} items skipped")
-            
+            children = self.zotero.children(item_key)
+            for child in children:
+                if (child['data']['itemType'] == 'attachment' and 
+                    child['data'].get('title', '').startswith('CODE Repository')):
+                    return True
+            return False
         except Exception as e:
-            print(f"Error: {e}")
-            sys.exit(1)
+            print(f"Error fetching item children: {e}")
+            return False
 
-
-def load_pwc_data(file_path: str) -> List[Dict[str, Any]]:
-    """Load Papers with Code data from JSON file"""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading PwC data: {e}")
-        sys.exit(1)
+    def process_collection(self, collection_name: str, pwc_data: List[Dict]):
+        """Process all papers in the collection and add GitHub links"""
+        collection_id = self.get_collection_id(collection_name)
+        if not collection_id:
+            return
+        
+        items = self.get_collection_items(collection_id)
+        processed = 0
+        matched = 0
+        skipped = 0
+        
+        for item in items:
+            item_type = item['data'].get('itemType', '')
+            if item_type not in ['journalArticle', 'preprint', 'conferencePaper', 'webpage', 'booksection']:
+                continue
+                
+            title = item['data'].get('title', '')
+            if not title:
+                continue
+                
+            # Check if item already has a CODE Repository attachment
+            if self.has_code_repository_attachment(item['key']):
+                print(f"Skipping (already has CODE Repository): {title}")
+                skipped += 1
+                continue
+                
+            processed += 1
+            match = self.find_best_match(title, pwc_data)
+            
+            if match:
+                print(f"Found match: {title} -> {match['paper_title']}")
+                if self.add_attachment_to_item(item['key'], match['repo_url'], title):
+                    matched += 1
+            else:
+                print(f"No match found for: {title}")
+        
+        print(f"\nProcessing complete:")
+        print(f"Papers processed: {processed}")
+        print(f"Papers skipped (already have CODE Repository): {skipped}")
+        print(f"GitHub links added: {matched}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Link Zotero papers with Papers with Code")
-    parser.add_argument("pwc_file", help="Path to the papers-with-code links JSON file")
-    parser.add_argument("user_id", help="Zotero user ID")
-    parser.add_argument("api_key", help="Zotero API key")
-    parser.add_argument("collection_name", help="Zotero collection name")
-    parser.add_argument("--threshold", type=int, default=80, 
-                       help="Fuzzy matching threshold (default: 80)")
+    parser = argparse.ArgumentParser(description='Link Zotero papers with GitHub repositories from Papers with Code')
+    parser.add_argument('pwc_json_path', help='Path to the Papers with Code links JSON file')
+    parser.add_argument('collection_name', help='Zotero collection name')
+    parser.add_argument('--zotero-user-id', help='Zotero user ID', default="3841519")
+    parser.add_argument('--zotero-api-key', help='Zotero API key', default="lMN3ZdjVGyZK3fYzQjOZJUlg")
     
     args = parser.parse_args()
     
-    print("Zotero API Key Setup:")
-    print("If you don't have an API key, get one at: https://www.zotero.org/settings/keys")
-    print("Make sure to enable 'Allow library access' for the key.")
-    print()
-    
-    print("Loading Papers with Code data...")
-    pwc_data = load_pwc_data(args.pwc_file)
-    print(f"Loaded {len(pwc_data)} papers from PwC data")
-    
-    print("Initialising Zotero linker...")
+    # Load Papers with Code data
     try:
-        linker = ZoteroPwcLinker(args.api_key, args.user_id, args.collection_name)
-    except ValueError as e:
-        print(f"Error: {e}")
+        with open(args.pwc_json_path, 'r') as f:
+            pwc_data = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: Could not find file {args.pwc_json_path}")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        print(f"Error: Invalid JSON in {args.pwc_json_path}")
         sys.exit(1)
     
-    print("Processing collection...")
-    linker.process_collection(pwc_data)
-    
-    print("Done!")
+    # Create linker and process collection
+    linker = ZoteroPWCLinker(args.zotero_user_id, args.zotero_api_key)
+    linker.process_collection(args.collection_name, pwc_data)
 
 
 if __name__ == "__main__":
