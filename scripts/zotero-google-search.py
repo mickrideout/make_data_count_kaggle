@@ -189,7 +189,7 @@ def process_zotero_collection(user_id: str, api_key: str, collection_name: str,
             
             # If Google API credentials are provided, perform search
             if google_api_key and google_cse_id:
-                search_query = f'"{title}" implements'
+                search_query = f'"{title}" paper site:github.com'
                 print(f"Searching for: {search_query}")
                 
                 # Perform Google search
