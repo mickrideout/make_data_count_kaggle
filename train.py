@@ -3,9 +3,9 @@ import sys
 import pandas as pd
 import mlflow
 
-from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_chunks, decompose_train_labels, convert_labels_csv_to_json, create_huggingface_dataset
+from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_lines, decompose_train_labels, create_dataset, train_test_split
 from make_data_count_kaggle.evaluation import calculate_f1_score
-from make_data_count_kaggle.causal_model import train_causal_model, run_inference
+from make_data_count_kaggle.universal_ner import generate_dataset
 
 
 if __name__ == "__main__":
@@ -23,14 +23,25 @@ if __name__ == "__main__":
         mlflow.log_param("model_dir", model_dir)
         # Dataset preprocessing
         decompose_train_labels(input_directory, output_directory)
-        convert_labels_csv_to_json(output_directory)
         convert_xmls_to_text(f"{input_directory}/train", output_directory)
         convert_pdfs_to_text(f"{input_directory}/train", output_directory)
-        decompose_text_to_chunks(output_directory)
-        dataset_dict = create_huggingface_dataset(output_directory)
+        decompose_text_to_lines(output_directory)
+        create_dataset(input_directory, output_directory)
+        train_df, test_df = train_test_split(f"{output_directory}/dataset.csv")
+        print(train_df.head())
+        print(test_df.head())
+        print(train_df.shape)
+        print(test_df.shape)
+        print(train_df['dataset_id'].value_counts())
+        print(test_df['dataset_id'].value_counts())
+        generate_dataset(train_df, f"{output_directory}/train_dataset.json")
+        generate_dataset(test_df, f"{output_directory}/test_dataset.json")
 
+
+
+        exit()
         # Causal model training
-        train_causal_model(dataset_dict, output_directory, model_dir)
+
 
         # Causal model inference
         inference_results = run_inference(dataset_dict, output_directory, model_dir)

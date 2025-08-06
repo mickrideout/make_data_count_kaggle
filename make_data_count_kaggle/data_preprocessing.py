@@ -11,55 +11,14 @@ from pathlib import Path
 import concurrent.futures
 from functools import partial
 import json
-from datasets import Dataset, DatasetDict
+import random
+from typing import List
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from sklearn.model_selection import train_test_split as sklearn_train_test_split
+import numpy as np
 
-
-def remove_references_section(text):
-    lines = text.split('\n')
-    cut_index = -1
-    
-    # Look backwards from end of document
-    for i in range(len(lines) - 1, max(0, int(len(lines) * 0.3)), -1):
-        line = lines[i].strip()
-        
-        obvious_patterns = [
-            r'^REFERENCES?$',
-            r'^\d+\.?\s+REFERENCES?$',
-            r'^\d+\.?\s+References?$',
-            r'^References?:?$',
-            r'^BIBLIOGRAPHY$',
-            r'^\d+\.?\s+BIBLIOGRAPHY$',
-            r'^\d+\.?\s+Bibliography$',
-            r'^Bibliography:?$',
-            r'^Literature\s+Cited$',
-            r'^Works\s+Cited$'
-        ]
-        
-        if any(re.match(pattern, line, re.IGNORECASE) for pattern in obvious_patterns):
-            # Double-check: look at following lines for citation patterns
-            following_lines = lines[i+1:i+4]
-            has_citations = False
-            
-            for follow_line in following_lines:
-                if follow_line.strip():
-                    # Check for obvious citation patterns
-                    if (re.search(r'\(\d{4}\)', follow_line) or    # (2020)
-                        re.search(r'\d{4}\.', follow_line) or       # 2020.
-                        'doi:' in follow_line.lower() or           # DOI
-                        ' et al' in follow_line.lower()):          # et al
-                        has_citations = True
-                        break
-            
-            # Only cut if we found citation-like content
-            if has_citations or i >= len(lines) - 3:  # Or very near end
-                cut_index = i
-                break
-    
-    if cut_index != -1:
-        return '\n'.join(lines[:cut_index]).strip()
-    
-    return text.strip()
+DATASET_FILE = "dataset.csv"
+TRAINING_LABELS_FILE = "train_labels.csv"
 
 def clean_text(text):
     """
@@ -72,9 +31,9 @@ def clean_text(text):
         str: Cleaned text with references section removed
     """
     # Remove references section
-    cleaned_text = remove_references_section(text)
+    # TODO: Implement this
     
-    return cleaned_text
+    return text
 
 
 def _convert_pdf_to_text_worker(pdf_file, output_dir):
@@ -245,7 +204,7 @@ def convert_xmls_to_text(input_dir, output_dir):
 
 def _decompose_text_worker(text_file, output_dir):
     """
-    Worker function to decompose a single text file into chunks using RecursiveCharacterTextSplitter.
+    Worker function to decompose a single text file into lines using advanced NLP methods.
     """
     text_path = Path(text_file)
     output_path = Path(output_dir)
@@ -259,30 +218,86 @@ def _decompose_text_worker(text_file, output_dir):
         with open(text_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Use RecursiveCharacterTextSplitter to split text into chunks
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=2000,
-            chunk_overlap=200,
-            length_function=len,
-            is_separator_regex=False
-        )
-        
-        chunks = text_splitter.split_text(content)
-        chunks = [chunk.strip() for chunk in chunks if chunk.strip()]
-
+        # Use context window approach for text decomposition
+        lines = decompose_text_with_context_window(content)
         
         with open(pickle_file, 'wb') as f:
-            pickle.dump(chunks, f)
+            pickle.dump(lines, f)
             
-        return f"Successfully decomposed {text_path.name} into {len(chunks)} chunks"
+        return f"Successfully decomposed {text_path.name} into {len(lines)} lines"
     except Exception as e:
         return f"Error decomposing {text_path.name}: {str(e)}"
 
 
-def decompose_text_to_chunks(output_dir):
+def decompose_text_with_context_window(text: str, context_window: int = 1024, overlap: int = 100) -> List[str]:
     """
-    Decompose all text in output_dir into chunks using RecursiveCharacterTextSplitter 
-    and save the chunk arrays as pickle files in parallel.
+    Decompose text into chunks based on configurable context window size with overlap.
+    
+    Args:
+        text (str): Input text to decompose
+        context_window (int): Maximum size of each chunk in characters (default: 1024)
+        overlap (int): Number of characters to overlap between chunks (default: 100)
+        
+    Returns:
+        List[str]: List of text chunks with specified context window size and overlap
+    """
+    if not text or len(text) <= context_window:
+        return [text] if text else []
+    
+    chunks = []
+    start = 0
+    
+    while start < len(text):
+        # Calculate end position for current chunk
+        end = start + context_window
+        
+        # If this is the last chunk and it would be smaller than overlap,
+        # just extend the previous chunk to include remaining text
+        if end >= len(text):
+            chunks.append(text[start:])
+            break
+        
+        # Try to find a good break point (sentence end or paragraph break)
+        chunk_text = text[start:end]
+        
+        # Look for sentence boundaries near the end of the chunk
+        sentence_breaks = []
+        for i, char in enumerate(chunk_text):
+            if char in '.!?' and i < len(chunk_text) - 1:
+                next_char = chunk_text[i + 1] if i + 1 < len(chunk_text) else ''
+                if next_char in ' \n\t' or i == len(chunk_text) - 1:
+                    sentence_breaks.append(i + 1)
+        
+        # Find the best break point in the last quarter of the chunk
+        best_break = None
+        quarter_point = len(chunk_text) * 3 // 4
+        
+        for break_point in reversed(sentence_breaks):
+            if break_point >= quarter_point:
+                best_break = start + break_point
+                break
+        
+        # If no good sentence break found, use the full context window
+        if best_break is None:
+            best_break = end
+        
+        chunks.append(text[start:best_break])
+        
+        # Move start position with overlap
+        start = best_break - overlap
+        
+        # Ensure we don't go backwards
+        if start < 0:
+            start = 0
+    
+    # Filter out very short chunks
+    return [chunk for chunk in chunks if len(chunk.strip()) > 20]
+
+
+def decompose_text_to_lines(output_dir):
+    """
+    Decompose all text in output_dir into lines and filter for lines longer than 10 characters,
+    then save the line arrays as pickle files in parallel.
     
     Args:
         output_dir (str): Directory containing text files to decompose
@@ -374,114 +389,102 @@ def decompose_train_labels(input_dir, output_dir):
         print("No testing labels found")
 
 
-def convert_labels_csv_to_json(output_dir):
+def _process_pkl_file_worker(pkl_file, df):
     """
-    Convert training_labels.csv to JSON format with dataset_mentions structure.
-    Creates a JSON array where each article has an array of dataset_mentions objects.
+    Worker function to process a single pickle file and extract matching rows.
     
     Args:
-        output_dir (str): Directory containing training_labels.csv and where training_labels.json will be saved
-    """
-    output_path = Path(output_dir)
-    
-    if not output_path.exists():
-        raise ValueError(f"Output directory does not exist: {output_dir}")
-    
-    # Process training labels
-    training_csv = output_path / "training_labels.csv"
-    if not training_csv.exists():
-        raise ValueError(f"training_labels.csv not found in {output_dir}")
-    
-    df = pd.read_csv(training_csv)
-    
-    # Group by article_id to create the JSON structure
-    json_data = []
-    
-    for article_id in df['article_id'].unique():
-        # Get all datasets for this article
-        article_datasets = df[df['article_id'] == article_id]
-        
-        # Create dataset_mentions array
-        dataset_mentions = []
-        for _, row in article_datasets.iterrows():
-            dataset_mentions.append({
-                "dataset_name": row['dataset_id'],
-                "dataset_type": row['type']
-            })
-        
-        # Create article object
-        article_obj = {
-            "article_id": article_id,
-            "dataset_mentions": dataset_mentions
-        }
-        
-        json_data.append(article_obj)
-    
-    # Save to JSON
-    training_json = output_path / "training_labels.json"
-    with open(training_json, 'w', encoding='utf-8') as f:
-        json.dump(json_data, f, indent=2, ensure_ascii=False)
-    
-    print(f"Created training_labels.json with {len(json_data)} articles")
-
-
-def create_huggingface_dataset(output_dir, train_ratio=0.8):
-    """
-    Convert training_labels.json to a HuggingFace Dataset with train/test split.
-    
-    Args:
-        output_dir (str): Directory containing training_labels.json
-        train_ratio (float): Ratio for train split (default 0.8 for 80/20 split)
+        pkl_file (Path): Path to the pickle file
+        df (pd.DataFrame): DataFrame containing dataset_id and type information
         
     Returns:
-        DatasetDict: HuggingFace dataset with 'train' and 'test' splits
+        list: List of dictionaries containing text, dataset_id, and type
+    """
+    output_rows = []
+    try:
+        with open(pkl_file, "rb") as f:
+            data = pickle.load(f)
+            for text in data:
+                found_match = False
+                for _, row in df.iterrows():
+                    if row["dataset_id"] in text:
+                        output_rows.append({
+                            "text": text,
+                            "dataset_id": row["dataset_id"],
+                            "type": row["type"]
+                        })
+                        found_match = True
+                        break
+                if not found_match:
+                    output_rows.append({
+                        "text": text,
+                        "dataset_id": "",
+                        "type": ""
+                    })
+        return output_rows
+    except Exception as e:
+        print(f"Error processing {pkl_file}: {str(e)}")
+        return []
+
+
+def create_dataset(input_dir, output_dir):
+    """
+    Convert training_labels.csv to a single JSON file.
+    
+    Args:
+        input_dir (str): Directory containing training_labels.csv
+        output_dir (str): Directory to save the output dataset.json
     """
     output_path = Path(output_dir)
     
     if not output_path.exists():
         raise ValueError(f"Output directory does not exist: {output_dir}")
     
-    # Load the training labels JSON
-    training_json = output_path / "training_labels.json"
-    if not training_json.exists():
-        raise ValueError(f"training_labels.json not found in {output_dir}")
+    # Load the training labels CSV
+    dataset_file = os.path.join(input_dir, TRAINING_LABELS_FILE)
+
+    if not os.path.exists(dataset_file):
+        raise ValueError(f"training_labels.csv not found in {input_dir}")
     
-    with open(training_json, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+    # Read the CSV file
+    df = pd.read_csv(dataset_file)
     
-    print(f"Loaded {len(data)} articles from training_labels.json")
+    print(f"Loaded {len(df)} rows from training_labels.csv")
+
+    df = df[(df['dataset_id'] != 'Missing') & (df['type'] != 'Missing')]
+
+    pkl_files = list(Path(output_dir).glob("*.pkl"))
+    print(f"Found {len(pkl_files)} pickle files to process")
     
-    # Convert to HuggingFace Dataset format
-    # Flatten the data structure - create one row per (article_id, dataset_id, type) combination
-    flattened_data = []
-    for article in data:
-        article_id = article['article_id']
-        dataset_mentions = article['dataset_mentions']
+    output_rows = []
+    
+    # Process pickle files in parallel
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        # Create partial function with df parameter
+        worker_func = partial(_process_pkl_file_worker, df=df)
         
-        # Create one row for each dataset in the article
-        for mention in dataset_mentions:
-            flattened_data.append({
-                'article_id': article_id,
-                'dataset_id': mention['dataset_name'],
-                'type': mention['dataset_type']
-            })
+        # Submit all pickle files for processing
+        future_to_file = {executor.submit(worker_func, pkl_file): pkl_file for pkl_file in pkl_files}
+        
+        # Collect results as they complete
+        for future in concurrent.futures.as_completed(future_to_file):
+            pkl_file = future_to_file[future]
+            try:
+                result = future.result()
+                output_rows.extend(result)
+                print(f"Processed {pkl_file.name}: {len(result)} rows")
+            except Exception as e:
+                print(f"Error processing {pkl_file.name}: {str(e)}")
     
-    print(f"Flattened to {len(flattened_data)} dataset citations")
+    output_df = pd.DataFrame(output_rows, columns=["text", "dataset_id", "type"])
+    print(f"Total rows processed: {len(output_df)}")
     
-    # Create HuggingFace Dataset
-    dataset = Dataset.from_list(flattened_data)
+    # Write dataset JSON file
+    dataset_file = os.path.join(output_dir, DATASET_FILE)
+    output_df.to_csv(dataset_file, index=False)
+    print(f"Created dataset.csv with {len(output_df)} rows")
     
-    # Create train/test split
-    train_test_split = dataset.train_test_split(train_size=train_ratio, seed=42)
-    
-    dataset_dict = DatasetDict({
-        'train': train_test_split['train'],
-        'test': train_test_split['test']
-    })
-    
-    print(f"Created dataset with {len(dataset_dict['train'])} training examples and {len(dataset_dict['test'])} test examples")
-    
-    return dataset_dict
+
 
 
 if __name__ == "__main__":
@@ -496,4 +499,44 @@ if __name__ == "__main__":
     
     convert_pdfs_to_text(input_directory, output_directory)
     convert_xmls_to_text(input_directory, output_directory)
-    decompose_text_to_chunks(output_directory)
+    decompose_text_to_lines(output_directory)
+
+
+# Write a function train_test_split, that takes a file path as an argument. Read the file into a pandas dataframe. The header for the csv is 'text,dataset_id,type', The dataset_id has missing values, rebalance the dataframe so that there are equal numbers of rows with missing dataset_id and rows that have dataset_id populated. Then using scikitlearn functions to split the dataframe into two dataframes, train and test, with a split of 80/20. Return both train and test dataframe
+
+def train_test_split(file_path):
+    """
+    Read a CSV file, rebalance missing dataset_id values, and split into train/test sets.
+    
+    Args:
+        file_path (str): Path to the CSV file with columns 'text,dataset_id,type'
+        
+    Returns:
+        tuple: (train_df, test_df) - Two pandas DataFrames with 80/20 split
+    """
+    df = pd.read_csv(file_path)
+    
+    missing_mask = df['dataset_id'].isna() | (df['dataset_id'] == '')
+    populated_mask = ~missing_mask
+    
+    missing_df = df[missing_mask]
+    populated_df = df[populated_mask]
+    
+    min_count = min(len(missing_df), len(populated_df))
+    
+    if len(missing_df) > min_count:
+        missing_df = missing_df.sample(n=min_count, random_state=42)
+    elif len(populated_df) > min_count:
+        populated_df = populated_df.sample(n=min_count, random_state=42)
+    
+    balanced_df = pd.concat([missing_df, populated_df], ignore_index=True)
+    balanced_df = balanced_df.sample(frac=1, random_state=42).reset_index(drop=True)
+    
+    train_df, test_df = sklearn_train_test_split(
+        balanced_df, 
+        test_size=0.2, 
+        random_state=42,
+        stratify=balanced_df['dataset_id'].isna() | (balanced_df['dataset_id'] == '')
+    )
+    
+    return train_df, test_df
