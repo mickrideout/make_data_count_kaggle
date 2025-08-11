@@ -13,7 +13,6 @@ from functools import partial
 import json
 import random
 from typing import List
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sklearn.model_selection import train_test_split as sklearn_train_test_split
 import numpy as np
 
@@ -209,10 +208,10 @@ def _decompose_text_worker(text_file, output_dir):
     text_path = Path(text_file)
     output_path = Path(output_dir)
     filename = text_path.stem
-    pickle_file = output_path / f"{filename}.pkl"
+    pickle_file = os.path.join(output_dir, f"{filename}.pkl")
 
-    if pickle_file.exists():
-        return f"Skipping {text_path.name} - {pickle_file.name} already exists"
+    if os.path.exists(pickle_file):
+        return f"Skipping {text_path.name} - {os.path.basename(pickle_file)} already exists"
 
     try:
         with open(text_path, 'r', encoding='utf-8') as f:
@@ -407,10 +406,19 @@ def _process_pkl_file_worker(pkl_file, df):
             for text in data:
                 found_match = False
                 for _, row in df.iterrows():
-                    if row["dataset_id"] in text:
+                    # Convert dataset_id to string and handle NaN values
+                    dataset_id = row["dataset_id"]
+                    if pd.isna(dataset_id):
+                        dataset_id = ""
+                    else:
+                        dataset_id = str(dataset_id)
+                    
+                    # Only check if dataset_id is not empty
+                    if dataset_id and dataset_id in text:
                         output_rows.append({
                             "text": text,
-                            "dataset_id": row["dataset_id"],
+                            "dataset_id": dataset_id,
+                            "article_id": row["article_id"],
                             "type": row["type"]
                         })
                         found_match = True
@@ -419,6 +427,7 @@ def _process_pkl_file_worker(pkl_file, df):
                     output_rows.append({
                         "text": text,
                         "dataset_id": "",
+                        "article_id": row["article_id"],
                         "type": ""
                     })
         return output_rows
@@ -427,7 +436,7 @@ def _process_pkl_file_worker(pkl_file, df):
         return []
 
 
-def create_dataset(input_dir, output_dir):
+def create_dataset_for_training(input_dir, output_dir):
     """
     Convert training_labels.csv to a single JSON file.
     
@@ -440,14 +449,20 @@ def create_dataset(input_dir, output_dir):
     if not output_path.exists():
         raise ValueError(f"Output directory does not exist: {output_dir}")
     
+    dataset_file = os.path.join(output_dir, DATASET_FILE)
+    
+    if os.path.exists(dataset_file):
+        print(f"Dataset file already exists: {dataset_file}")
+        return pd.read_csv(dataset_file)
+    
     # Load the training labels CSV
-    dataset_file = os.path.join(input_dir, TRAINING_LABELS_FILE)
+    training_labels_file = os.path.join(input_dir, TRAINING_LABELS_FILE)
 
-    if not os.path.exists(dataset_file):
+    if not os.path.exists(training_labels_file):
         raise ValueError(f"training_labels.csv not found in {input_dir}")
     
     # Read the CSV file
-    df = pd.read_csv(dataset_file)
+    df = pd.read_csv(training_labels_file)
     
     print(f"Loaded {len(df)} rows from training_labels.csv")
 
@@ -476,13 +491,15 @@ def create_dataset(input_dir, output_dir):
             except Exception as e:
                 print(f"Error processing {pkl_file.name}: {str(e)}")
     
-    output_df = pd.DataFrame(output_rows, columns=["text", "dataset_id", "type"])
+    output_df = pd.DataFrame(output_rows, columns=["article_id", "dataset_id", "type", "text"])
     print(f"Total rows processed: {len(output_df)}")
     
     # Write dataset JSON file
-    dataset_file = os.path.join(output_dir, DATASET_FILE)
-    output_df.to_csv(dataset_file, index=False)
+
+    output_df.to_csv(dataset_file, index=False, escapechar='\\', quoting=1)
     print(f"Created dataset.csv with {len(output_df)} rows")
+    
+    return output_df
     
 
 

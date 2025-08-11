@@ -3,7 +3,7 @@ import sys
 import pandas as pd
 import mlflow
 
-from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_lines, decompose_train_labels, create_dataset, train_test_split
+from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_lines, decompose_train_labels, create_dataset_for_training, train_test_split
 from make_data_count_kaggle.evaluation import calculate_f1_score
 from make_data_count_kaggle.universal_ner import generate_dataset
 
@@ -26,7 +26,7 @@ if __name__ == "__main__":
         convert_xmls_to_text(f"{input_directory}/train", output_directory)
         convert_pdfs_to_text(f"{input_directory}/train", output_directory)
         decompose_text_to_lines(output_directory)
-        create_dataset(input_directory, output_directory)
+        create_dataset_for_training(input_directory, output_directory)
         train_df, test_df = train_test_split(f"{output_directory}/dataset.csv")
         print(train_df.head())
         print(test_df.head())
