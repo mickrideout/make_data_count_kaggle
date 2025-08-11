@@ -11,7 +11,7 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,max_split_size
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'  # For better error reporting
 os.environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'  # Disable memory caching for more predictable behavior
 
-from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_lines, decompose_train_labels, create_dataset_for_training, train_test_split
+from make_data_count_kaggle.data_preprocessing import convert_pdfs_to_text, convert_xmls_to_text, decompose_text_to_lines, decompose_train_labels, create_dataset_for_training, create_dataset_for_inference, train_test_split
 from make_data_count_kaggle.evaluation import calculate_f1_score
 
 
@@ -189,8 +189,6 @@ def run_uniner_inference(dataset_df, output_directory, model_path):
     # Create NER examples from the dataset
     ner_examples = create_ner_examples_from_dataset(dataset_df)
 
-    import pandas as pd
-    pd.DataFrame(ner_examples).to_csv("ner_examples.csv", index=False)
     
     print(f"Processing {len(ner_examples)} articles with UniversalNER...")
     
@@ -224,9 +222,6 @@ def run_uniner_inference(dataset_df, output_directory, model_path):
         
         print(f"Processed batch {i//batch_size + 1}/{(len(ner_examples) + batch_size - 1)//batch_size}")
 
-    import pandas as pd
-    stage1_df = pd.DataFrame(stage1_results)
-    stage1_df.to_csv("stage1_output.csv", index=False)
     
     # STAGE 2: Classification of identified datasets
     print("STAGE 2: Classifying datasets as primary or secondary...")
@@ -303,12 +298,11 @@ def main(input_directory, output_directory, model_path):
     import torch
     import gc
     
-    # Dataset preprocessing (same as original infer.py)
-    decompose_train_labels(input_directory, output_directory)
+    # Dataset preprocessing for inference
     convert_xmls_to_text(f"{input_directory}/test", output_directory)
     convert_pdfs_to_text(f"{input_directory}/test", output_directory)
     decompose_text_to_lines(output_directory)
-    dataset_df = create_dataset_for_training(input_directory, output_directory)
+    dataset_df = create_dataset_for_inference(output_directory)
     
     # Clear any Python garbage before model loading
     gc.collect()

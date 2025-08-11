@@ -34,6 +34,8 @@ if __name__ == "__main__":
         print(test_df.shape)
         print(train_df['dataset_id'].value_counts())
         print(test_df['dataset_id'].value_counts())
+        train_df.to_csv(f"{output_directory}/train_df.csv", index=False, escapechar='\\', quoting=1)
+        test_df.to_csv(f"{output_directory}/test_df.csv", index=False, escapechar='\\', quoting=1)
         generate_dataset(train_df, f"{output_directory}/train_dataset.json")
         generate_dataset(test_df, f"{output_directory}/test_dataset.json")
 

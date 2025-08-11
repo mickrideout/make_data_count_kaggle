@@ -500,6 +500,84 @@ def create_dataset_for_training(input_dir, output_dir):
     print(f"Created dataset.csv with {len(output_df)} rows")
     
     return output_df
+
+
+def _process_pkl_file_for_inference_worker(pkl_file):
+    """
+    Worker function to process a single pickle file for inference.
+    
+    Args:
+        pkl_file (Path): Path to the pickle file
+        
+    Returns:
+        list: List of dictionaries containing article_id and text
+    """
+    output_rows = []
+    try:
+        with open(pkl_file, "rb") as f:
+            data = pickle.load(f)
+            article_id = pkl_file.stem
+            
+            for text in data:
+                output_rows.append({
+                    "article_id": article_id,
+                    "text": text
+                })
+        return output_rows
+    except Exception as e:
+        print(f"Error processing {pkl_file}: {str(e)}")
+        return []
+
+
+def create_dataset_for_inference(output_dir):
+    """
+    Create dataset from pickle files for inference, returning only article_id and text columns.
+    
+    Args:
+        output_dir (str): Directory containing pickle files
+        
+    Returns:
+        pd.DataFrame: DataFrame with article_id and text columns
+    """
+    input_path = Path(output_dir)
+    
+    if not input_path.exists():
+        raise ValueError(f"Input directory does not exist: {output_dir}")
+    
+    test_dataset_path = input_path / "test_df.csv"
+    article_ids_to_include = None
+    if test_dataset_path.exists():
+        test_df = pd.read_csv(test_dataset_path)
+        if "article_id" in test_df.columns:
+            article_ids_to_include = set(str(a) for a in test_df["article_id"].unique())
+    
+    pkl_files = list(input_path.glob("*.pkl"))
+    print(f"Found {len(pkl_files)} pickle files to process for inference")
+
+    if article_ids_to_include:
+        pkl_files = [pkl_file for pkl_file in pkl_files if pkl_file.stem in article_ids_to_include]
+    
+    output_rows = []
+    
+    # Process pickle files in parallel
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        # Submit all pickle files for processing
+        future_to_file = {executor.submit(_process_pkl_file_for_inference_worker, pkl_file): pkl_file for pkl_file in pkl_files}
+        
+        # Collect results as they complete
+        for future in concurrent.futures.as_completed(future_to_file):
+            pkl_file = future_to_file[future]
+            try:
+                result = future.result()
+                output_rows.extend(result)
+                print(f"Processed {pkl_file.name}: {len(result)} rows")
+            except Exception as e:
+                print(f"Error processing {pkl_file.name}: {str(e)}")
+    
+    output_df = pd.DataFrame(output_rows, columns=["article_id", "text"])
+    print(f"Total rows processed for inference: {len(output_df)}")
+    
+    return output_df
     
 
 
