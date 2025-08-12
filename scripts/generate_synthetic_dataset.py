@@ -50,9 +50,10 @@ def main():
                 for text in text_array:
                     if dataset_id in text:
                         output_data.append({
-                            'text': text,
+                            'article_id': article_id,
                             'dataset_id': dataset_id,
-                            'type': data_type
+                            'type': data_type,
+                            'text': text
                         })
             except Exception as e:
                 print(f"Error loading {pickle_file}: {e}")
@@ -69,7 +70,7 @@ def main():
     print(f"Original data shape: {output_df.shape}")
     
     # Prepare training dataframe for SDV
-    training_df = output_df[['text', 'dataset_id', 'type']].copy()
+    training_df = output_df.copy()
     
     # Create metadata for SDV
     print("Creating SDV metadata...")
@@ -125,7 +126,7 @@ def main():
     synthesizer.fit(training_df)
     
     # Generate synthetic data
-    target_rows = 50000
+    target_rows = 1000
     synthetic_rows_needed = target_rows - len(output_df)
     
     print(f"Generating {synthetic_rows_needed} synthetic rows...")

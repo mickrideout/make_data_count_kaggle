@@ -123,7 +123,7 @@ def dataset_classification_examples(dataset_df):
                 {"from": "human", "value": f"{text_content}"},
                 {"from": "gpt", "value": "I've read this text."},
                 {"from": "human", "value": f"The dataset mentioned is {dataset_id}. Is it a primary or secondary source?"},
-                {"from": "gpt", "value": "["}
+                {f"from": "gpt", "value": f"[{dataset_id}]"}
             ]
         }
         
@@ -148,8 +148,7 @@ def create_ner_examples_from_dataset(dataset_df):
             "conversations": [
                 {"from": "human", "value": f"{text_content}"},
                 {"from": "gpt", "value": "I've read this text."},
-                {"from": "human", "value": "What datasets are mentioned in this text?"},
-                {"from": "gpt", "value": "["}
+                {"from": "human", "value": "What describes the datasets that are mentioned in this text?"},
             ]
         }
         
@@ -169,19 +168,38 @@ def run_uniner_inference(dataset_df, output_directory, model_path):
     print(f"Loading UniversalNER model from {model_path}...")
     
     # Load the UniversalNER model
-    llm = LLM(
-        model=model_path,
-        tensor_parallel_size=1,
-        gpu_memory_utilization=0.8,
-        max_num_seqs=8,
-        max_num_batched_tokens=512,
-        disable_log_stats=True,
-        trust_remote_code=True,
-        enforce_eager=True,
-        max_model_len=2048,
-        swap_space=0,
-        disable_custom_all_reduce=True,
-    )
+    import os
+    if os.environ.get("KAGGLE_KERNEL_RUN_TYPE", None) is not None:
+        print("Running in a Kaggle environment.")
+        llm = LLM(
+            model=model_path,
+            tensor_parallel_size=2,
+            gpu_memory_utilization=0.8,
+            max_num_seqs=8,
+            max_num_batched_tokens=2048,
+            disable_log_stats=True,
+            trust_remote_code=True,
+            enforce_eager=True,
+            max_model_len=2048,
+            swap_space=0,
+            disable_custom_all_reduce=True,
+        )
+    else:
+        print("Running in a local environment.")
+        llm = LLM(
+            model=model_path,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.8,
+            max_num_seqs=8,
+            max_num_batched_tokens=2048,
+            disable_log_stats=True,
+            trust_remote_code=True,
+            enforce_eager=True,
+            max_model_len=2048,
+            swap_space=0,
+            disable_custom_all_reduce=True,
+
+        )
 
     # STAGE 1: Dataset identification
     print("STAGE 1: Identifying datasets...")

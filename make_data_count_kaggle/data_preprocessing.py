@@ -544,7 +544,7 @@ def create_dataset_for_inference(output_dir):
     if not input_path.exists():
         raise ValueError(f"Input directory does not exist: {output_dir}")
     
-    test_dataset_path = input_path / "test_df.csv"
+    test_dataset_path = input_path / "test_dataset.csv"
     article_ids_to_include = None
     if test_dataset_path.exists():
         test_df = pd.read_csv(test_dataset_path)

@@ -48,7 +48,7 @@ def create_json(text, dataset_id, type):
             },
             {
                 "from": "human",
-                "value": "What datasets are mentioned in this text?"
+                "value": "What describes the datasets that are mentioned in this text?"
             },
             {
                 "from": "gpt",
@@ -56,7 +56,7 @@ def create_json(text, dataset_id, type):
             },
             {
                 "from": "human",
-                "value": "Is the dataset mentioned a primary or secondary source?"
+                "value": "What describes the types of dataset sources that are mentioned in this text? (Primary if generated / constructed, Secondary if provided / utilised)"
             },
             {
                 "from": "gpt",
@@ -66,7 +66,7 @@ def create_json(text, dataset_id, type):
     }
 
 # create a function, generate_dataset, which takes an pandas df as an argument (which has the columns text, dataset_id and type) and an output file path, iterate over the rows and use create_json to generate the json for that row. add all rows to an array and write the json to the output file
-def generate_dataset(df, output_file_path):
+def generate_uniner_dataset(df, output_file_path):
     """
     Generate a dataset from a pandas DataFrame and write to JSON file.
     
