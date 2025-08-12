@@ -160,7 +160,7 @@ def create_ner_examples_from_dataset(dataset_df):
     
     return examples
 
-def run_uniner_inference(dataset_df, output_directory, model_path):
+def run_uniner_inference(dataset_df, output_directory, model_path, tensor_parallel_size=1):
     from vllm import LLM
     import torch
     import gc
@@ -173,7 +173,7 @@ def run_uniner_inference(dataset_df, output_directory, model_path):
         print("Running in a Kaggle environment.")
         llm = LLM(
             model=model_path,
-            tensor_parallel_size=2,
+            tensor_parallel_size=tensor_parallel_size,
             gpu_memory_utilization=0.8,
             max_num_seqs=8,
             max_num_batched_tokens=2048,
@@ -309,7 +309,7 @@ def run_uniner_inference(dataset_df, output_directory, model_path):
         print("No datasets identified in stage 1, returning empty results")
         return []
 
-def main(input_directory, output_directory, model_path):
+def main(input_directory, output_directory, model_path, tensor_parallel_size=1):
     print("Starting UniversalNER inference pipeline with memory optimizations...")
     
     # Import torch for memory management
@@ -342,7 +342,7 @@ def main(input_directory, output_directory, model_path):
 
     try:
         print("Running UniversalNER inference...")
-        inference_results = run_uniner_inference(dataset_df, output_directory, model_path)
+        inference_results = run_uniner_inference(dataset_df, output_directory, model_path, tensor_parallel_size)
     except Exception as e:
         print(f"UniversalNER inference failed: {e}")
         # Create empty results as fallback
@@ -415,12 +415,13 @@ def main(input_directory, output_directory, model_path):
         print(f"No train_labels.csv found at {train_labels_path}, skipping evaluation")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print("Usage: python infer_uniner.py <input_dir> <output_dir> <model_path>")
+    if len(sys.argv) != 5:
+        print("Usage: python infer_uniner.py <input_dir> <output_dir> <model_path> <tensor_parallel_size>")
         sys.exit(1)
     
     input_directory = sys.argv[1]
     output_directory = sys.argv[2]
     model_path = sys.argv[3]
-
-    main(input_directory, output_directory, model_path)
+    tensor_parallel_size = int(sys.argv[4])
+    
+    main(input_directory, output_directory, model_path, tensor_parallel_size)
