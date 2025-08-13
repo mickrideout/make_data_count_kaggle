@@ -160,7 +160,7 @@ def create_ner_examples_from_dataset(dataset_df):
     
     return examples
 
-def run_uniner_inference(dataset_df, output_directory, model_path, tensor_parallel_size=1):
+def run_uniner_inference(dataset_df, output_directory, model_path, tensor_parallel_size=1, batch_size=100):
     from vllm import LLM
     import torch
     import gc
@@ -211,7 +211,6 @@ def run_uniner_inference(dataset_df, output_directory, model_path, tensor_parall
     print(f"Processing {len(ner_examples)} articles with UniversalNER...")
     
     # Run inference in batches to manage memory
-    batch_size = 10
     stage1_results = []
     
     for i in range(0, len(ner_examples), batch_size):
@@ -309,7 +308,7 @@ def run_uniner_inference(dataset_df, output_directory, model_path, tensor_parall
         print("No datasets identified in stage 1, returning empty results")
         return []
 
-def main(input_directory, output_directory, model_path, tensor_parallel_size=1):
+def main(input_directory, output_directory, model_path, tensor_parallel_size=1, batch_size=100):
     print("Starting UniversalNER inference pipeline with memory optimizations...")
     
     # Import torch for memory management
@@ -342,7 +341,7 @@ def main(input_directory, output_directory, model_path, tensor_parallel_size=1):
 
     try:
         print("Running UniversalNER inference...")
-        inference_results = run_uniner_inference(dataset_df, output_directory, model_path, tensor_parallel_size)
+        inference_results = run_uniner_inference(dataset_df, output_directory, model_path, tensor_parallel_size, batch_size)
     except Exception as e:
         print(f"UniversalNER inference failed: {e}")
         # Create empty results as fallback
@@ -415,13 +414,13 @@ def main(input_directory, output_directory, model_path, tensor_parallel_size=1):
         print(f"No train_labels.csv found at {train_labels_path}, skipping evaluation")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        print("Usage: python infer_uniner.py <input_dir> <output_dir> <model_path> <tensor_parallel_size>")
+    if len(sys.argv) != 6:
+        print("Usage: python infer_uniner.py <input_dir> <output_dir> <model_path> <tensor_parallel_size> <batch_size>")
         sys.exit(1)
     
     input_directory = sys.argv[1]
     output_directory = sys.argv[2]
     model_path = sys.argv[3]
     tensor_parallel_size = int(sys.argv[4])
-    
-    main(input_directory, output_directory, model_path, tensor_parallel_size)
+    batch_size = int(sys.argv[5])
+    main(input_directory, output_directory, model_path, tensor_parallel_size, batch_size)
